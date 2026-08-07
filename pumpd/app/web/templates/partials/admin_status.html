@@ -1,0 +1,92 @@
+<div class="health-grid card">
+  <div class="health-item">
+    <div class="label">System</div>
+    <div class="value"><span class="badge {{ health.status }}">{{ health.status | upper }}</span></div>
+  </div>
+  <div class="health-item">
+    <div class="label">Scheduler</div>
+    <div class="value"><span class="badge {{ 'ok' if health.checks.scheduler == 'ok' else 'fail' }}">{{ health.checks.scheduler }}</span></div>
+  </div>
+  <div class="health-item">
+    <div class="label">Forecast age</div>
+    <div class="value">{{ health.checks.last_forecast_age_minutes }} min</div>
+  </div>
+  <div class="health-item">
+    <div class="label">Eval age</div>
+    <div class="value">{{ health.checks.last_eval_age_minutes }} min</div>
+  </div>
+  <div class="health-item">
+    <div class="label">HW faults</div>
+    <div class="value"><span class="badge {{ 'ok' if health.checks.hardware_faults == 0 else 'fault' }}">{{ health.checks.hardware_faults }}</span></div>
+  </div>
+  <div class="health-item">
+    <div class="label">Control</div>
+    <div class="value">{{ control_mode }}</div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>Rain signal</h2>
+    <p>
+      <span class="badge {{ 'on' if rain.is_raining else 'off' }}">{{ 'Raining' if rain.is_raining else 'Dry' }}</span>
+      · {{ rain.rate_mm_h }} mm/h · confidence {{ (rain.confidence * 100) | round(0) }}%
+    </p>
+    <p class="meta">source: {{ rain.source }} · ts: {{ rain.ts.strftime('%Y-%m-%d %H:%M:%S') }} UTC
+      {% if rain.water_present is not none %} · water_present: {{ rain.water_present }}{% endif %}
+    </p>
+  </div>
+
+  {% for p in pump_cards %}
+  {% with admin=true %}
+  {% include "partials/pump_card.html" %}
+  {% endwith %}
+  {% endfor %}
+</div>
+
+<div class="card">
+  <h2>Next 12 h forecast</h2>
+  <div class="forecast-bar">
+    {% for f in status.forecast_12h %}
+    <span title="{{ f.hour_ts.strftime('%H:%M') }}: {{ f.pop_pct }}% / {{ f.rain_mm }}mm"
+          style="height:{{ [4, f.pop_pct * 0.48] | max }}px"></span>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>Hardware health</h2>
+  <table>
+    <thead><tr><th>Component</th><th>Type</th><th>Status</th><th>Failures</th><th>Last OK</th><th>Error</th></tr></thead>
+    <tbody>
+      {% for h in status.hardware_health %}
+      <tr>
+        <td>{{ h.component_id }}</td>
+        <td>{{ h.component_type }}</td>
+        <td><span class="badge {{ h.status }}">{{ h.status }}</span></td>
+        <td>{{ h.consecutive_failures }}</td>
+        <td>{{ h.last_ok_at or '—' }}</td>
+        <td>{{ h.last_error or '—' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6">No hardware health data yet</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Provider health</h2>
+  <table>
+    <thead><tr><th>Provider</th><th>Last OK</th><th>Last error</th></tr></thead>
+    <tbody>
+      {% for h in status.provider_health %}
+      <tr>
+        <td>{{ h.provider }}</td>
+        <td>{{ h.last_ok_at.strftime('%Y-%m-%d %H:%M') if h.last_ok_at else '—' }}</td>
+        <td>{{ h.last_error or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

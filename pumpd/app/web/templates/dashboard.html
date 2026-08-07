@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pumpd — Rain Pump Controller</title>
+  <script src="https://unpkg.com/htmx.org@2.0.3"></script>
+  <style>
+    :root { font-family: system-ui, sans-serif; color: #1a1a1a; background: #f4f6f8; }
+    body { max-width: 960px; margin: 0 auto; padding: 1rem; }
+    h1 { margin-bottom: 0.25rem; }
+    .subtitle { color: #555; margin-bottom: 1.5rem; }
+    .card { background: #fff; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; }
+    .badge.on { background: #d1fae5; color: #065f46; padding: 0.15rem 0.5rem; border-radius: 4px; }
+    .badge.off { background: #fee2e2; color: #991b1b; padding: 0.15rem 0.5rem; border-radius: 4px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    td, th { text-align: left; padding: 0.35rem 0.25rem; border-bottom: 1px solid #eee; }
+    button { margin-right: 0.35rem; padding: 0.35rem 0.65rem; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>Rain Roof Pumps</h1>
+  <p class="subtitle">Rooftop rain pump controller v1.1</p>
+
+  <div id="status-panel" hx-get="/partials/status" hx-trigger="load, every 30s" hx-swap="innerHTML">
+    {% include "partials/status.html" %}
+  </div>
+
+  <div class="card">
+    <h2>Recent events</h2>
+    <table>
+      <thead><tr><th>Time</th><th>Pump</th><th>Type</th><th>Reason</th></tr></thead>
+      <tbody>
+        {% for e in status.events %}
+        <tr>
+          <td>{{ e.ts.strftime('%H:%M:%S') }}</td>
+          <td>{{ e.pump_name or '—' }}</td>
+          <td>{{ e.event_type }}</td>
+          <td>{{ e.reason }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>

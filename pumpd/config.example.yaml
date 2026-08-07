@@ -1,0 +1,83 @@
+timezone: America/New_York
+
+location:
+  latitude: 40.7128
+  longitude: -74.0060
+  name: ""
+  address: ""
+
+weather:
+  poll_minutes: 30
+  providers: [open_meteo, nws]
+
+rules:
+  evaluate_minutes: 10
+  precip_probability_threshold: 70
+  precip_amount_threshold_mm: 2.0
+  lookahead_hours: 2
+  post_rain_drain_minutes: 30
+  sensor_dry_minutes: 10
+  manual_revert_hours: 4
+  duty_cycle:
+    enabled: false
+    on_minutes: 10
+    off_minutes: 20
+
+safety:
+  max_continuous_runtime_minutes: 60
+  min_cooldown_minutes: 15
+  watchdog_stale_forecast_hours: 3
+
+pumps:
+  - name: north_pump
+    enabled: true
+    tuya:
+      device_id: ""
+      ip: "192.168.1.50"
+      local_key: ""
+      version: 3.4
+      switch_code: switch_1  # switch_2, switch_3 for multi-outlet plugs
+    smartthings:
+      device_id: ""
+
+notifications:
+  ntfy:
+    enabled: true
+    url: "https://ntfy.sh"
+    topic: ""
+  smtp:
+    enabled: false
+    host: ""
+    port: 587
+    username: ""
+    from_addr: ""
+    to_addrs: []
+
+mqtt:
+  enabled: false
+  host: mosquitto
+  port: 1883
+  topic: sensors/rain
+  min_confidence: 0.8
+
+api:
+  auth_enabled: false
+  api_key: ""
+  lock_timeout_seconds: 30
+
+hardware_monitor:
+  enabled: true
+  sensor_stale_minutes: 15
+  pump_failure_threshold: 3
+  verify_mismatch_threshold: 2
+
+logging:
+  json: false
+
+devices:
+  # local = LAN first | cloud = Tuya Cloud + SmartThings | auto = LAN, cloud, ST
+  control_mode: auto
+  # Delay between turning on switch_2, switch_3, … on the same multi-outlet plug
+  switch_stagger_seconds: 30
+
+database_url: sqlite:///./data/pumpd.db

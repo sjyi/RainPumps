@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Rain Roof Pumps — User{% endblock %}
+{% block heading %}Rain Roof Pumps{% endblock %}
+{% block subtitle %}Rain pump status{% endblock %}
+
+{% block content %}
+<script>
+document.body.dataset.controlMode = '{{ config.devices.control_mode }}';
+document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_seconds * 1000) | int }}';
+</script>
+<div id="status-panel" hx-get="/partials/user/status" hx-trigger="load, every 30s, refresh from:body" hx-swap="innerHTML">
+  {% include "partials/user_status.html" %}
+</div>
+{% endblock %}

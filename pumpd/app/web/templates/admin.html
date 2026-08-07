@@ -1,0 +1,593 @@
+{% extends "base.html" %}
+{% block title %}Rain Roof Pumps — Admin{% endblock %}
+{% block heading %}Rain Roof Pumps Admin{% endblock %}
+{% block subtitle %}Diagnostics, overrides, and event log{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<style>
+  #location-map { height: 320px; border-radius: 8px; margin: 0.75rem 0; }
+  .location-form { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
+  .location-form input[type="text"] { flex: 1; min-width: 200px; padding: 0.45rem 0.65rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.875rem; }
+  .search-results { list-style: none; padding: 0; margin: 0; max-height: 160px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 6px; }
+  .search-results li { padding: 0.5rem 0.65rem; cursor: pointer; border-bottom: 1px solid #f3f4f6; font-size: 0.875rem; }
+  .search-results li:hover { background: #f9fafb; }
+  .location-status { font-size: 0.875rem; color: #6b7280; min-height: 1.25rem; }
+  .map-attribution { font-size: 0.75rem; color: #9ca3af; margin-top: 0.35rem; }
+  .import-toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }
+  .import-status { font-size: 0.875rem; color: #6b7280; min-height: 1.25rem; margin-top: 0.5rem; }
+  .import-table input[type="text"] { width: 100%; padding: 0.3rem 0.45rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.8rem; }
+  .import-table .mono { font-family: ui-monospace, monospace; font-size: 0.75rem; color: #4b5563; }
+  .import-errors { color: #b45309; font-size: 0.85rem; margin: 0.5rem 0; }
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0;
+  }
+  .section-header h2 { margin: 0; flex: 1; }
+  .section-toggle {
+    flex-shrink: 0;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    margin: 0;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    background: #fff;
+    color: #374151;
+    font-size: 0.85rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .section-toggle:hover { background: #f9fafb; }
+  .collapsible-body { margin-top: 0.75rem; }
+  .collapsible-body.is-collapsed { display: none; }
+  .sim-toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+  .sim-status {
+    margin-top: 0.65rem;
+    padding: 0.55rem 0.7rem;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    color: #374151;
+    min-height: 2.5rem;
+  }
+  .sim-status.is-active { background: #eff6ff; border-color: #bfdbfe; color: #1e40af; }
+  .sim-status.is-complete { background: #ecfdf5; border-color: #a7f3d0; color: #065f46; }
+  .sim-status.is-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+</style>
+{% endblock %}
+
+{% block content %}
+<script>
+document.body.dataset.controlMode = '{{ control_mode }}';
+document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_seconds * 1000) | int }}';
+</script>
+<div class="card" id="location-section">
+  <div class="section-header">
+    <h2>Location</h2>
+    <button type="button" class="section-toggle" id="location-toggle" aria-expanded="false" aria-controls="location-body" title="Expand Location">▼</button>
+  </div>
+  <div id="location-body" class="collapsible-body is-collapsed">
+  <p class="meta">Search or click/drag the map pin. Saving updates config and refreshes forecasts.</p>
+  <div class="location-form">
+    <input type="text" id="location-search" placeholder="Search city or address…" autocomplete="off">
+    <button type="button" id="location-search-btn">Search</button>
+    <button type="button" class="primary" id="location-save-btn">Save location</button>
+  </div>
+  <ul id="search-results" class="search-results" style="display:none"></ul>
+  <div id="location-map"></div>
+  <p class="location-status" id="location-status">
+    Current: {{ config.location.name or config.location.address or (config.location.latitude ~ ', ' ~ config.location.longitude) }}
+  </p>
+  <p class="map-attribution">© OpenStreetMap contributors · Geocoding via Open-Meteo &amp; Nominatim</p>
+  </div>
+</div>
+
+<div class="card" id="import-pumps-section">
+  <div class="section-header">
+    <h2>Import pumps</h2>
+    <button type="button" class="section-toggle" id="import-pumps-toggle" aria-expanded="false" aria-controls="import-pumps-body" title="Expand Import pumps">▼</button>
+  </div>
+  <div id="import-pumps-body" class="collapsible-body is-collapsed">
+  <p class="meta">
+    Discover switches from SmartThings and Tuya (cloud, LAN scan, or uploaded <code>devices.json</code> from
+    <code>python -m tinytuya wizard</code>). Select devices and import into <code>config.yaml</code>.
+  </p>
+  <div class="import-toolbar">
+    <button type="button" class="primary" id="discover-devices-btn">Discover devices</button>
+    <label class="btn" style="cursor:pointer;margin:0;">
+      Upload wizard JSON
+      <input type="file" id="tuya-json-upload" accept=".json,application/json" hidden>
+    </label>
+    <label><input type="checkbox" id="lan-scan-toggle" checked> LAN scan (Tuya UDP)</label>
+    <button type="button" id="import-devices-btn" disabled>Import selected</button>
+  </div>
+  <ul id="import-setup" class="meta" style="margin:0.5rem 0;padding-left:1.2rem;"></ul>
+  <p class="import-errors" id="import-errors"></p>
+  <p class="import-status" id="import-status">Loading credential status…</p>
+  <table class="import-table" id="import-table" style="display:none">
+    <thead>
+      <tr>
+        <th><input type="checkbox" id="import-select-all" checked></th>
+        <th>Pump name</th>
+        <th>Label</th>
+        <th>Switch</th>
+        <th>Tuya ID / IP</th>
+        <th>SmartThings ID</th>
+      </tr>
+    </thead>
+    <tbody id="import-table-body"></tbody>
+  </table>
+  </div>
+</div>
+
+<div class="card" id="auto-sim-section">
+  <div class="section-header">
+    <h2>Test auto mode</h2>
+    <button type="button" class="section-toggle" id="auto-sim-toggle" aria-expanded="false" aria-controls="auto-sim-body" title="Expand Test auto mode">▼</button>
+  </div>
+  <div id="auto-sim-body" class="collapsible-body is-collapsed">
+  <p class="meta">
+    Simulates forecast rain starting and stopping so you can exercise Auto mode without real weather.
+    Completes in about 2 minutes (45s rain → dry → 1 min drain). Sends real pump commands.
+  </p>
+  <div class="sim-toolbar">
+    <button type="button" class="primary" id="sim-start-btn">Start rain simulation</button>
+    <button type="button" id="sim-stop-btn" disabled>Stop simulation</button>
+  </div>
+  <div class="sim-status" id="sim-status">Set pumps to Auto, then start the simulation.</div>
+  </div>
+</div>
+
+<div id="status-panel" hx-get="/partials/admin/status" hx-trigger="load, every 30s, refresh from:body" hx-swap="innerHTML">
+  {% include "partials/admin_status.html" %}
+</div>
+
+<div class="card">
+  <h2>Recent events</h2>
+  <table>
+    <thead><tr><th>Time</th><th>Pump</th><th>Type</th><th>Reason</th></tr></thead>
+    <tbody>
+      {% for e in events %}
+      <tr>
+        <td>{{ e.ts.strftime('%m-%d %H:%M:%S') }}</td>
+        <td>{{ e.pump_name or '—' }}</td>
+        <td>{{ e.event_type }}</td>
+        <td>{{ e.reason }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4">No events recorded</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="meta">Full log: <code>GET /api/events</code> · Health: <code>GET /health</code></p>
+</div>
+
+<script>
+(function() {
+  const lat = {{ config.location.latitude }};
+  const lon = {{ config.location.longitude }};
+  const map = L.map('location-map').setView([lat, lon], 13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '© OpenStreetMap'
+  }).addTo(map);
+
+  let marker = L.marker([lat, lon], { draggable: true }).addTo(map);
+  let selectedName = {{ (config.location.name or '') | tojson }};
+  let selectedAddress = {{ (config.location.address or '') | tojson }};
+  const statusEl = document.getElementById('location-status');
+  const searchInput = document.getElementById('location-search');
+  const resultsEl = document.getElementById('search-results');
+
+  function setStatus(msg) { statusEl.textContent = msg; }
+
+  async function reverseGeocode(latitude, longitude) {
+    const resp = await fetch(`/api/geocode/reverse?lat=${latitude}&lon=${longitude}`);
+    if (!resp.ok) return `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+    const data = await resp.json();
+    return data.address;
+  }
+
+  marker.on('dragend', async function() {
+    const pos = marker.getLatLng();
+    setStatus('Looking up address…');
+    selectedAddress = await reverseGeocode(pos.lat, pos.lng);
+    selectedName = '';
+    setStatus(`Selected: ${selectedAddress} (${pos.lat.toFixed(4)}, ${pos.lng.toFixed(4)})`);
+  });
+
+  async function doSearch() {
+    const q = searchInput.value.trim();
+    if (!q) return;
+    setStatus('Searching…');
+    const resp = await fetch(`/api/geocode/search?q=${encodeURIComponent(q)}`);
+    if (!resp.ok) { setStatus('Search failed'); return; }
+    const data = await resp.json();
+    resultsEl.innerHTML = '';
+    if (!data.results.length) {
+      resultsEl.style.display = 'none';
+      setStatus('No results');
+      return;
+    }
+    data.results.forEach(r => {
+      const li = document.createElement('li');
+      li.textContent = r.name;
+      li.onclick = () => {
+        marker.setLatLng([r.latitude, r.longitude]);
+        map.setView([r.latitude, r.longitude], 13);
+        selectedName = r.name;
+        selectedAddress = r.name;
+        resultsEl.style.display = 'none';
+        setStatus(`Selected: ${r.name}`);
+      };
+      resultsEl.appendChild(li);
+    });
+    resultsEl.style.display = 'block';
+    setStatus(`${data.results.length} result(s)`);
+  }
+
+  document.getElementById('location-search-btn').onclick = doSearch;
+  searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+
+  document.getElementById('location-save-btn').onclick = async function() {
+    const pos = marker.getLatLng();
+    setStatus('Saving…');
+    const resp = await fetch('/api/config/location', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        latitude: pos.lat,
+        longitude: pos.lng,
+        name: selectedName,
+        address: selectedAddress
+      })
+    });
+    if (!resp.ok) {
+      setStatus('Save failed: ' + (await resp.text()));
+      return;
+    }
+    const data = await resp.json();
+    selectedName = data.name || '';
+    selectedAddress = data.address || '';
+    setStatus(`Saved: ${data.address || data.name || (data.latitude + ', ' + data.longitude)}`);
+  };
+
+  window.__pumpdLocationMap = map;
+})();
+</script>
+
+<script>
+(function() {
+  const toggle = document.getElementById('location-toggle');
+  const body = document.getElementById('location-body');
+  if (!toggle || !body) return;
+
+  function setExpanded(expanded) {
+    body.classList.toggle('is-collapsed', !expanded);
+    toggle.textContent = expanded ? '▲' : '▼';
+    toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    toggle.title = expanded ? 'Minimize Location' : 'Expand Location';
+    if (expanded && window.__pumpdLocationMap) {
+      setTimeout(function() { window.__pumpdLocationMap.invalidateSize(); }, 0);
+    }
+  }
+
+  toggle.addEventListener('click', function() {
+    setExpanded(body.classList.contains('is-collapsed'));
+  });
+})();
+</script>
+
+<script>
+(function() {
+  const toggle = document.getElementById('auto-sim-toggle');
+  const body = document.getElementById('auto-sim-body');
+  if (toggle && body) {
+    function setExpanded(expanded) {
+      body.classList.toggle('is-collapsed', !expanded);
+      toggle.textContent = expanded ? '▲' : '▼';
+      toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      toggle.title = expanded ? 'Minimize Test auto mode' : 'Expand Test auto mode';
+    }
+    toggle.addEventListener('click', function() {
+      setExpanded(body.classList.contains('is-collapsed'));
+    });
+  }
+})();
+</script>
+
+<script>
+(function() {
+  const statusEl = document.getElementById('sim-status');
+  const startBtn = document.getElementById('sim-start-btn');
+  const stopBtn = document.getElementById('sim-stop-btn');
+  if (!statusEl || !startBtn || !stopBtn) return;
+
+  let pollTimer = null;
+
+  function renderStatus(data) {
+    const active = data.active || ['starting', 'rain', 'dry', 'drain'].includes(data.phase);
+    startBtn.disabled = active;
+    stopBtn.disabled = !active;
+    statusEl.className = 'sim-status';
+    if (active) statusEl.classList.add('is-active');
+    else if (data.phase === 'complete') statusEl.classList.add('is-complete');
+    else if (data.phase === 'error') statusEl.classList.add('is-error');
+
+    let text = data.message || 'Ready';
+    if (data.auto_pumps && data.auto_pumps.length) {
+      text += ' · Auto pumps: ' + data.auto_pumps.join(', ');
+    }
+    if (data.skipped_pumps && data.skipped_pumps.length) {
+      text += ' · Skipped (not Auto): ' + data.skipped_pumps.join(', ');
+    }
+    statusEl.textContent = text;
+
+    if (active && !pollTimer) {
+      pollTimer = setInterval(refreshStatus, 2000);
+    }
+    if (!active && pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+    if (!active && (data.phase === 'complete' || data.phase === 'stopped') && window.refreshStatusPanel) {
+      window.refreshStatusPanel();
+    }
+  }
+
+  async function refreshStatus() {
+    const resp = await fetch('/api/simulate/status');
+    if (resp.ok) renderStatus(await resp.json());
+  }
+
+  startBtn.onclick = async function() {
+    statusEl.textContent = 'Starting simulation…';
+    const resp = await fetch('/api/simulate/auto-rain/start', { method: 'POST' });
+    if (!resp.ok) {
+      let msg = 'Could not start simulation';
+      try {
+        const err = await resp.json();
+        if (err.detail) msg = typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail);
+      } catch (_) {}
+      statusEl.className = 'sim-status is-error';
+      statusEl.textContent = msg;
+      return;
+    }
+    renderStatus(await resp.json());
+    if (window.refreshStatusPanel) window.refreshStatusPanel();
+  };
+
+  stopBtn.onclick = async function() {
+    const resp = await fetch('/api/simulate/auto-rain/stop', { method: 'POST' });
+    if (resp.ok) renderStatus(await resp.json());
+    if (window.refreshStatusPanel) window.refreshStatusPanel();
+  };
+
+  refreshStatus();
+})();
+</script>
+
+<script>
+(function() {
+  const toggle = document.getElementById('import-pumps-toggle');
+  const body = document.getElementById('import-pumps-body');
+  if (!toggle || !body) return;
+
+  function setExpanded(expanded) {
+    body.classList.toggle('is-collapsed', !expanded);
+    toggle.textContent = expanded ? '▲' : '▼';
+    toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    toggle.title = expanded ? 'Minimize Import pumps' : 'Expand Import pumps';
+  }
+
+  toggle.addEventListener('click', function() {
+    setExpanded(body.classList.contains('is-collapsed'));
+  });
+})();
+</script>
+
+<script>
+(function() {
+  const importStatus = document.getElementById('import-status');
+  const importErrors = document.getElementById('import-errors');
+  const importSetup = document.getElementById('import-setup');
+  const importTable = document.getElementById('import-table');
+  const importBody = document.getElementById('import-table-body');
+  const importBtn = document.getElementById('import-devices-btn');
+  const selectAll = document.getElementById('import-select-all');
+  let discovered = [];
+
+  function slugify(label) {
+    return label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'pump';
+  }
+
+  function renderSetup(setup) {
+    importSetup.innerHTML = '';
+    const items = [
+      ['SmartThings', setup.smartthings],
+      ['Tuya cloud', setup.tuya_cloud],
+      ['devices.json', setup.tuya_json],
+    ];
+    items.forEach(([label, info]) => {
+      const li = document.createElement('li');
+      const mark = info.configured ? '✓' : '○';
+      li.textContent = `${mark} ${label}: ${info.hint}`;
+      importSetup.appendChild(li);
+    });
+    if (!setup.ready) {
+      importStatus.textContent =
+        'Configure at least one source above, then click Discover. Easiest: run tinytuya wizard and upload devices.json.';
+    } else {
+      importStatus.textContent = 'Credentials detected — click Discover devices.';
+    }
+  }
+
+  async function loadSetup() {
+    const resp = await fetch('/api/devices/setup');
+    if (resp.ok) renderSetup(await resp.json());
+    else importStatus.textContent = 'Could not load credential status';
+  }
+  loadSetup();
+
+  function renderDevices(devices) {
+    discovered = devices;
+    importBody.innerHTML = '';
+    devices.forEach((d, idx) => {
+      const tr = document.createElement('tr');
+      const tuyaInfo = d.tuya_device_id
+        ? `${d.tuya_device_id.slice(0, 12)}… / ${d.tuya_ip || 'no IP'}`
+        : '—';
+      const stInfo = d.smartthings_device_id
+        ? `${d.smartthings_device_id.slice(0, 12)}…`
+        : '—';
+      const switchInfo = d.tuya_switch_code || 'switch_1';
+      tr.innerHTML = `
+        <td><input type="checkbox" class="import-row" data-idx="${idx}" checked></td>
+        <td><input type="text" class="pump-name" value="${slugify(d.label)}" data-idx="${idx}"></td>
+        <td>${d.label}</td>
+        <td class="mono">${switchInfo}</td>
+        <td class="mono">${tuyaInfo}${d.tuya_local_key ? ' · key ✓' : ''}</td>
+        <td class="mono">${stInfo}</td>`;
+      importBody.appendChild(tr);
+    });
+    importTable.style.display = devices.length ? 'table' : 'none';
+    importBtn.disabled = !devices.length;
+  }
+
+  document.getElementById('discover-devices-btn').onclick = async function() {
+    importStatus.textContent = 'Discovering devices…';
+    importErrors.textContent = '';
+    const lan = document.getElementById('lan-scan-toggle').checked;
+    const resp = await fetch(`/api/devices/discover?lan_scan=${lan}`);
+    if (!resp.ok) {
+      importStatus.textContent = 'Discovery failed';
+      return;
+    }
+    const data = await resp.json();
+    renderDevices(data.devices || []);
+    if (data.setup) renderSetup(data.setup);
+    const errLines = Object.entries(data.errors || {}).map(([k, msg]) => `${k}: ${msg}`);
+    importErrors.textContent = errLines.join(' · ');
+    const srcLines = Object.entries(data.sources || {})
+      .filter(([, v]) => v.status === 'ok')
+      .map(([k, v]) => `${k}: ${v.message}`);
+    importStatus.textContent = srcLines.length
+      ? srcLines.join(' · ')
+      : (data.devices.length ? `Found ${data.devices.length} device(s)` : 'No devices found — check setup above');
+  };
+
+  document.getElementById('tuya-json-upload').onchange = async function(ev) {
+    const file = ev.target.files[0];
+    if (!file) return;
+    importStatus.textContent = 'Uploading ' + file.name + '…';
+    const form = new FormData();
+    form.append('file', file);
+    const resp = await fetch('/api/devices/upload-tuya-json', { method: 'POST', body: form });
+    if (!resp.ok) {
+      importStatus.textContent = 'Upload failed';
+      return;
+    }
+    const data = await resp.json();
+    importStatus.textContent = 'Saved ' + data.filename + ' — discovering devices…';
+    await loadSetup();
+    document.getElementById('discover-devices-btn').click();
+    ev.target.value = '';
+  };
+
+  selectAll.onchange = function() {
+    document.querySelectorAll('.import-row').forEach(cb => { cb.checked = selectAll.checked; });
+  };
+
+  importBtn.onclick = async function() {
+    const pumps = [];
+    document.querySelectorAll('.import-row').forEach(cb => {
+      if (!cb.checked) return;
+      const idx = Number(cb.dataset.idx);
+      const d = discovered[idx];
+      const nameInput = document.querySelector(`.pump-name[data-idx="${idx}"]`);
+      pumps.push({
+        name: nameInput.value.trim() || slugify(d.label),
+        enabled: true,
+        tuya_device_id: d.tuya_device_id || '',
+        tuya_ip: d.tuya_ip || '',
+        tuya_local_key: d.tuya_local_key || '',
+        tuya_version: d.tuya_version || 3.4,
+        tuya_switch_code: d.tuya_switch_code || '',
+        smartthings_device_id: d.smartthings_device_id || '',
+      });
+    });
+    if (!pumps.length) {
+      importStatus.textContent = 'Select at least one device';
+      return;
+    }
+    importStatus.textContent = 'Importing…';
+    const resp = await fetch('/api/devices/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pumps, mode: 'merge' }),
+    });
+    if (!resp.ok) {
+      importStatus.textContent = 'Import failed: ' + (await resp.text());
+      return;
+    }
+    const data = await resp.json();
+    importStatus.textContent = `Imported ${data.pumps.length} pump(s)`;
+    if (window.refreshStatusPanel) window.refreshStatusPanel();
+  };
+})();
+</script>
+
+<script>
+(function() {
+  function refreshStatusPanel() {
+    if (window.htmx) {
+      htmx.trigger(document.body, 'refresh');
+      return;
+    }
+    const panel = document.getElementById('status-panel');
+    if (!panel) return;
+    fetch('/partials/admin/status')
+      .then((resp) => (resp.ok ? resp.text() : Promise.reject()))
+      .then((html) => {
+        panel.innerHTML = html;
+      })
+      .catch(() => {});
+  }
+  window.refreshStatusPanel = refreshStatusPanel;
+
+  document.addEventListener('click', function(ev) {
+    const btn = ev.target.closest('.remove-pump-btn');
+    if (!btn) return;
+    const panel = document.getElementById('status-panel');
+    if (!panel || !panel.contains(btn)) return;
+
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    const name = btn.dataset.name;
+    if (!confirm(`Remove "${name}" from pumpd only?\n\nThis updates local config — it does not delete or unlink the device in Tuya Cloud or Smart Life.`)) return;
+
+    btn.disabled = true;
+    fetch(`/api/pumps/${encodeURIComponent(name)}`, { method: 'DELETE' })
+      .then(async (resp) => {
+        if (!resp.ok) {
+          alert('Remove failed: ' + (await resp.text()));
+          btn.disabled = false;
+          return;
+        }
+        refreshStatusPanel();
+      })
+      .catch(() => {
+        alert('Remove failed');
+        btn.disabled = false;
+      });
+  });
+})();
+</script>
+{% endblock %}

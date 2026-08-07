@@ -1,0 +1,70 @@
+<div class="grid">
+  <div class="card">
+    <h2>Rain signal</h2>
+    <p>
+      <span class="badge {{ 'on' if rain.is_raining else 'off' }}">
+        {{ 'Raining' if rain.is_raining else 'Dry' }}
+      </span>
+      · {{ rain.rate_mm_h }} mm/h · source: {{ rain.source }}
+    </p>
+  </div>
+
+  {% for p in status.pumps %}
+  <div class="card">
+    <h2>{{ p.name }}</h2>
+    <p>
+      <span class="badge {{ 'on' if p.device_on else 'off' }}">{{ 'ON' if p.device_on else 'OFF' }}</span>
+      · mode: {{ p.mode }} · phase: {{ p.phase }}
+    </p>
+    <p>Runtime today: {{ p.runtime_today_min }} min · continuous: {{ p.runtime_continuous_min }} min</p>
+    <button hx-post="/api/pumps/{{ p.name }}/mode" hx-vals='{"mode": "auto"}' hx-swap="none">Auto</button>
+    <button hx-post="/api/pumps/{{ p.name }}/mode" hx-vals='{"mode": "manual_on"}' hx-swap="none">Manual ON</button>
+    <button hx-post="/api/pumps/{{ p.name }}/mode" hx-vals='{"mode": "manual_off"}' hx-swap="none">Manual OFF</button>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <h2>Next 12 h forecast</h2>
+  <div style="display:flex;gap:2px;height:48px;align-items:flex-end;">
+    {% for f in status.forecast_12h %}
+    <span title="{{ f.hour_ts.strftime('%H:%M') }}: {{ f.pop_pct }}% / {{ f.rain_mm }}mm"
+          style="flex:1;background:#93c5fd;border-radius:2px 2px 0 0;height:{{ [4, f.pop_pct * 0.48]|max }}px"></span>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>Hardware health</h2>
+  <table>
+    <thead><tr><th>Component</th><th>Type</th><th>Status</th><th>Last OK</th><th>Error</th></tr></thead>
+    <tbody>
+      {% for h in status.hardware_health %}
+      <tr>
+        <td>{{ h.component_id }}</td>
+        <td>{{ h.component_type }}</td>
+        <td>{{ h.status }}</td>
+        <td>{{ h.last_ok_at or '—' }}</td>
+        <td>{{ h.last_error or '—' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5">No hardware health data yet</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="card">
+  <h2>Provider health</h2>
+  <table>
+    <thead><tr><th>Provider</th><th>Last OK</th><th>Last error</th></tr></thead>
+    <tbody>
+      {% for h in status.provider_health %}
+      <tr>
+        <td>{{ h.provider }}</td>
+        <td>{{ h.last_ok_at.strftime('%Y-%m-%d %H:%M') if h.last_ok_at else '—' }}</td>
+        <td>{{ h.last_error or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

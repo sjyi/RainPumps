@@ -1,0 +1,23 @@
+services:
+  pumpd:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - pumpd-data:/app/data
+      - ./config.yaml:/app/config.yaml
+      - ./credentials:/app/credentials
+    env_file:
+      - .env
+    restart: unless-stopped
+
+  # Phase 2 — uncomment when rain sensor is ready
+  # mosquitto:
+  #   image: eclipse-mosquitto:2
+  #   ports:
+  #     - "1883:1883"
+  #   volumes:
+  #     - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+volumes:
+  pumpd-data:

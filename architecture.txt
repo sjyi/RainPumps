@@ -1,0 +1,443 @@
+
+# Rooftop Rain Pump Automation — System Architecture
+
+**Version:** 1.1.0
+
+## 1. Overview
+
+A local controller service running on an Ubuntu server automates rooftop
+drain pumps that are currently switched manually through SmartThings and
+Smart Life. The service polls a weather forecast, decides when pumps should
+run, and switches them — preferring **local LAN control** (Tuya local
+protocol) with the **SmartThings cloud API as fallback**. Phase 2 adds a
+physical rain sensor over MQTT for precise, forecast-independent triggering.
+
+## 2. System Architecture Diagram
+
+flowchart TB
+subgraph Cloud["Cloud (Internet)"]
+WX["Weather APIs<br/>Open-Meteo (primary)<br/>NWS api.weather.gov
+(secondary, US only)"]
+ST["SmartThings Cloud API<br/>(fallback control + state verify)"]
+TUYACLOUD["Tuya Cloud<br/>(one-time: obtain device local keys)"]
+end
+
+subgraph Server["Ubuntu Server (Docker Compose)"]
+subgraph CTRL["pumpd (Python)"]
+SCHED["Scheduler<br/>(APScheduler)"]
+FC["Forecast Ingestor"]
+RULES["Rules Engine<br/>(pure decision logic)"]
+DEV["Device Adapter Layer"]
+TA["Tuya Local Adapter<br/>(tinytuya)"]
+STA["SmartThings Adapter<br/>(REST)"]
+SAFE["Safety Monitor<br/>(max runtime, cooldown, watchdog)"]
+LOCK["Per-pump Command Lock"]
+end
+
+API["Web UI + REST API<br/>(FastAPI)"]
+DB[("SQLite<br/>state, run history, forecasts")]
+MQTT["Mosquitto MQTT Broker<br/>(Phase 2)"]
+NOTIF["Notifier<br/>(ntfy / SMTP)"]
+end
+
+subgraph Roof["Rooftop"]
+P1["Pump 1<br/>(Tuya smart switch/plug)"]
+P2["Pump 2..N"]
+RS["Rain Sensor — Phase 2<br/>ESP32 + tipping-bucket
+gauge<br/>(ESPHome)"]
+FL["Float Switch — Phase 2 optional<br/>basin water present"]
+end
+
+USER["Browser / Phone<br/>(dashboard, manual override)"]
+
+FC -->|poll hourly forecast| WX
+SCHED --> FC
+SCHED --> RULES
+FC --> DB
+RULES --> LOCK
+LOCK --> DEV
+RULES --> DB
+DEV --> TA
+DEV -->|fallback / verify| STA
+STA --> ST
+TA -->|LAN, local key| P1
+TA -->|LAN| P2
+TUYACLOUD -.->|setup only| TA
+RS -->|rain rate / tips| MQTT
+FL -.->|water present| RS
+MQTT -->|Phase 2 input| RULES
+SAFE --> LOCK
+API --> RULES
+API --> DB
+USER --> API
+RULES --> NOTIF
+
+## 3. Functional Description
+
+### Forecast Ingestor
+
+Polls Open-Meteo (free, no API key) every `poll_minutes` (default 30) for
+hourly precipitation probability and expected rainfall (mm) at the
+building's coordinates. Open-Meteo fields: `precipitation_probability`,
+`rain` (mm per hour).
+
+NWS is a **secondary, US-only** source for cross-checking. It requires a two-
+step lookup (`/points/{lat},{lon}` → gridpoint hourly forecast). NWS is
+**skipped automatically** when `location` is outside the US bounding box.
+Provider responses are normalized to a common `HourlyForecast` shape before
+storage.
+
+When providers disagree, the rules engine uses the **more conservative**
+reading for start decisions (higher probability, higher amount) and records
+both sources in the event log. Provider health (last success, last error,
+staleness) is stored and shown on the dashboard; a failed secondary provider
+does not block the primary.
+
+During internet outages, the engine continues evaluating using the **most
+recent cached forecast** plus MQTT/manual inputs. Cached data older than
+`watchdog_stale_forecast_hours` triggers the stale-forecast watchdog (see
+Safety).
+
+### Rules Engine
+
+Runs on a schedule (default every 10 min) and on manual-override events. Core
+logic is implemented as **pure functions** with explicit inputs and outputs
+(see §6).
+
+**Pre-emptive start:** within the next `lookahead_hours`, if **any single
+hour** has precipitation probability ≥ `precip_probability_threshold`
+**and** the **sum of hourly rain (mm)** over the lookahead window ≥
+`precip_amount_threshold_mm` → transition enabled pumps in `auto` mode to
+`pre_rain` / running.
+
+**Continue (rain active):** while the rain signal reports `is_raining=true`,
+keep pumps running. When `duty_cycle.enabled=true`, apply on/off cycling
+**only during pre_rain and running phases** — not during post_rain_drain.
+
+**Post-rain drain:** after the rain signal clears (`is_raining=false`), run
+pumps **continuously** (duty cycle disabled) for `post_rain_drain_minutes`,
+then stop.
+
+**Stop:** rain signal inactive and post-rain drain complete → pumps off
+(subject to cooldown).
+
+**Phase 2 — sensor blending:**
+
+• MQTT rain signal takes precedence over forecast for **"is it raining
+now"** (`is_raining`, `rate_mm_h`).
+• Forecast still drives **pre-emptive starts** even when the sensor is dry.
+• If the sensor reports dry for `sensor_dry_minutes` while pumps are
+running, stop early (skip remaining post-rain drain unless basin float switch
+says water is present).
+• Optional float/level switch (Phase 2): `water_present=true` forces run
+regardless of forecast; `water_present=false` for `sensor_dry_minutes`
+allows early stop even if forecast still shows rain.
+
+**Per-pump behavior:** rain decisions apply to all pumps with `enabled=true`.
+Each pump maintains its own mode, runtime counters, cooldown, and phase
+state. One pump failing control does not stop others.
+
+### Decision Priority Ladder
+
+Highest priority wins. Safety hard-stops cannot be overridden by automation
+(but `manual_on` still commands the device — safety will force off if limits
+are exceeded).
+
+1. **Safety hard-stops** — max continuous runtime, cooldown after safety
+trip, stale-forecast watchdog (see exceptions below), engine-evaluation
+watchdog
+2. **Manual mode** — `manual_on` / `manual_off` (auto-reverts to `auto` after
+`manual_revert_hours`)
+3. **Phase 2 float switch** — `water_present=true` → run;
+`water_present=false` → allow stop
+4. **Phase 2 MQTT sensor** — `is_raining` for current conditions; early stop
+after `sensor_dry_minutes`
+5. **Forecast rules** — pre-emptive start, continue, post-rain drain
+6. **Default** — off
+
+**Watchdog vs sensor exception:** when MQTT is enabled and the sensor
+reports `is_raining=true` with `confidence ≥ mqtt_min_confidence`, pumps
+**remain running** even if forecasts are stale. A notification is still
+sent. If the sensor is disabled, stale, or low-confidence, the stale-forecast
+watchdog turns pumps off.
+
+### Pump Phase State Machine (per pump, `auto` mode)
+
+idle ──(pre-emptive start)──► pre_rain ──(rain active)──► running
+▲                              │                            │
+│                              │                            │
+│         (rain ends)          ▼                            ▼
+└────(drain complete)──── post_rain_drain ◄──(rain ends)────┘
+
+• `manual_on` / `manual_off` bypass the state machine until revert.
+• Safety max-runtime forces off → `idle` with cooldown lock.
+• Duty-cycle on/off alternates within `pre_rain` and `running` only.
+
+### Device Adapter Layer
+
+Abstracts pump control behind a single interface (`turn_on / turn_off /
+get_state`). Primary path is **tinytuya** over the LAN (requires one-time
+local-key extraction via the Tuya IoT platform). Fallback path is the
+**SmartThings REST API** when local control fails after 3 retries.
+
+**Verification:** after every command, read state back via the **same
+adapter that succeeded**. If verification fails, retry once via the
+alternate adapter. Log and notify on persistent mismatch or total failure.
+Tuya local-key rotation (re-pairing) surfaces as a control failure alert.
+
+### Safety Monitor
+
+Enforces per-pump invariants regardless of rules:
+
+• **Max continuous runtime** — force off when exceeded; enter cooldown.
+• **Cooldown** — after any safety-forced stop, block automated restarts for
+`min_cooldown_minutes`. Does **not** block `manual_on` (but max-runtime still
+applies once running).
+• **Stale-forecast watchdog** — if no fresh forecast within
+`watchdog_stale_forecast_hours`, turn pumps off and alert (unless MQTT
+sensor exception above applies).
+• **Engine-evaluation watchdog** — if no rules evaluation within `2 ×
+evaluate_minutes`, turn pumps off and alert. Tracked via
+`engine_last_eval_at` in DB.
+
+All decisions and commands are written to the `events` table.
+
+### Web UI / REST API
+
+FastAPI serves a Jinja2 dashboard with optional htmx partial refresh (`GET
+/partials/status` every 30 s). REST endpoints support curl and Home
+Assistant integration.
+
+Optional **API key auth** (`api.auth_enabled`, header `X-API-Key`) protects
+write endpoints and the dashboard. When disabled (default for trusted LAN),
+all endpoints are open.
+
+### Notifier
+
+Pushes events (pumps started/stopped, control failure, watchdog trip,
+provider errors) via ntfy and/or SMTP.
+
+### Phase 2 — Rain Sensor
+
+An ESP32 running ESPHome with a tipping-bucket rain gauge publishes rain
+tips/rate to Mosquitto. Optional float switches per basin publish
+`water_present`. The rules engine subscribes via `mqtt_signal.py`. No cloud
+involved.
+
+## 4. Components
+
+### Software (all on the Ubuntu server, Docker Compose)
+
+COMPONENT    │           TECHNOLOGY           │              ROLE
+──────────────────┼────────────────────────────────┼─────────────────────────────────
+pumpd           │ Python 3.12, FastAPI,          │ Forecast polling, rules
+│ APScheduler, tinytuya, httpx,  │ engine, device control,
+safety
+│ paho-mqtt                      │
+Web UI / API    │ FastAPI + Uvicorn, Jinja2 (+   │ Dashboard, manual
+override,
+│ htmx partials)                 │ REST API
+Database        │ SQLite (SQLAlchemy 2.x)        │ Config state, run
+history,
+│                                │ forecast cache, event
+log
+MQTT broker     │ Eclipse Mosquitto (container,  │ Rain sensor ingestion
+│ commented out until Phase 2)   │
+Notifications   │ ntfy and/or SMTP               │ Alerts and status
+pushes
+Weather sources │ Open-Meteo (primary), NWS      │ Hourly precipitation
+forecast
+│ (secondary, US only)           │
+Setup tooling   │ tinytuya wizard + Tuya IoT     │ One-time local-key
+extraction
+│ platform account               │
+Deployment      │ Docker Compose + systemd       │ Reliability, restarts,
+logs
+│ (compose up on boot)           │
+
+### Hardware
+
+ITEM              │             NOTES
+─────────────────────────────────┼─────────────────────────────────
+Existing Tuya/Smart Life smart │ Reused as-is; controlled
+switches or plugs driving the  │ locally via LAN. Fixed IPs
+pumps                          │ (DHCP reservations).
+Ubuntu server                  │ Always-on mini PC, NUC,
+│ or Pi 4/5. Wired Ethernet
+│ recommended.
+Phase 2: ESP32 dev board       │ Runs ESPHome; Wi-Fi to LAN,
+(e.g., ESP32-WROOM)            │ publishes to MQTT.
+Phase 2: Tipping-bucket rain   │ Reed-switch pulse → ESP32
+gauge (e.g., Misol WH-SP-RG)   │ GPIO; actual rain rate.
+Phase 2 (optional):            │ Wired to ESP32; best dry-run
+Float/level switch in each     │ protection.
+collection basin               │
+Optional: weatherproof         │ Rooftop mounting.
+enclosure, 5 V supply for      │
+ESP32                          │
+
+## 5. Key Design Decisions
+
+• **Local-first control:** tinytuya keeps pump switching on the LAN during
+internet outages. SmartThings cloud is fallback only.
+• **Forecast now, sensor later:** abstract `RainSignal` input; Phase 2 is a
+config change plus `mqtt_signal.py`.
+• **Fail-safe defaults:** on uncertainty (no data, control failure), pumps
+default off with an alert; max-runtime caps prevent dry running.
+• **Conservative multi-provider:** when Open-Meteo and NWS disagree, prefer
+the reading that would start sooner / run longer.
+• **Per-pump command lock:** asyncio lock per pump serializes scheduler,
+safety, and API commands to prevent races.
+• **SQLite over Postgres:** single-host, low write volume; zero admin. Schema
+migrations via Alembic.
+
+## 6. Rules Engine Contract
+
+Pure-function interface (all I/O mocked in tests):
+
+@dataclass(frozen=True)
+class RainState:
+is_raining: bool
+rate_mm_h: float
+confidence: float  # 0.0–1.0
+source: str        # "forecast" | "mqtt" | "composite"
+ts: datetime
+
+@dataclass(frozen=True)
+class PumpPhase:
+name: str
+phase: Literal["idle", "pre_rain", "running", "post_rain_drain"]
+mode: Literal["auto", "manual_on", "manual_off"]
+duty_on: bool              # current duty-cycle position
+runtime_continuous_min: int
+cooldown_until: datetime | None
+manual_revert_at: datetime | None
+
+def evaluate(
+*,
+now: datetime,
+rain: RainState,
+forecast_window: list[HourlyForecast],  # next lookahead_hours
+pumps: list[PumpPhase],
+config: RulesConfig,
+safety: SafetyState,
+) -> list[PumpCommand]:  # turn_on | turn_off | no_op + reason string
+...
+
+**Forecast-derived is_raining (when MQTT disabled):** true if any hour in the
+current + next 1 h has probability ≥ threshold **or** rate ≥ 0.1 mm/h
+derived from forecast rain amounts.
+
+## 7. Database Schema (SQLite)
+
+TABLE      │          KEY COLUMNS           │          PURPOSE
+──────────────────┼────────────────────────────────┼────────────────────────────
+forecasts       │ provider, hour_ts, pop_pct,    │ Hourly forecast cache
+│ rain_mm, fetched_at            │
+provider_health │ provider, last_ok_at,          │ Provider status
+│ last_error, last_error_at      │
+pump_state      │ name, phase, mode,             │ Current pump state
+│ device_on, duty_on,            │
+│ runtime_continuous_min,        │
+│ cooldown_until,                │
+│ manual_revert_at,              │
+│ runtime_today_min, updated_at  │
+events          │ id, ts, pump_name, event_type, │ Audit log
+│ reason, details_json           │
+engine_meta     │ key, value                     │ engine_last_eval_at,
+etc.
+
+"Runtime today" uses the configured `timezone` (calendar day boundary).
+
+## 8. REST API
+
+METHOD │          PATH          │        AUTH         │
+DESCRIPTION
+─────────┼────────────────────────┼─────────────────────┼───────────────────────────────────
+GET    │ /                      │ optional            │ Dashboard (Jinja2)
+GET    │ /partials/status       │ optional            │ htmx partial: pump
+cards +
+│                        │                     │ rain signal
+GET    │ /api/status            │ optional            │ JSON: pumps, rain
+signal,
+│                        │                     │ forecast 12 h,
+provider health
+POST   │ /api/pumps/{name}/mode │ required if auth on │ Body: {"mode":
+│                        │                     │
+"auto"|"manual_on"|"manual_off"}
+GET    │ /api/events            │ optional            │ Query: limit
+(default 50, max
+│                        │                     │ 500), pump, since
+GET    │ /health                │ none                │ See §9
+
+Errors: `404` unknown pump; `409` command lock timeout; `422` validation.
+
+## 9. Health Endpoint
+
+`GET /health` returns `200` when all checks pass, `503` otherwise.
+
+{
+"status": "ok",
+"checks": {
+"db": "ok",
+"scheduler": "ok",
+"last_forecast_age_minutes": 12,
+"last_eval_age_minutes": 3,
+"engine_watchdog": "ok"
+}
+}
+
+• `scheduler`: APScheduler running and jobs registered.
+• `last_forecast_age_minutes`: age of newest forecast row (warn if >
+`poll_minutes × 2`).
+• `last_eval_age_minutes`: age of `engine_last_eval_at` (fail if > `2 ×
+evaluate_minutes`).
+• Docker `HEALTHCHECK` should call this endpoint.
+
+## 10. Configuration Reference
+
+See `config.example.yaml` in the repository. Key additions in v1.1:
+
+• `timezone` — IANA name for "runtime today" and hour boundaries (default
+`America/New_York`)
+• `manual_revert_hours` — manual override auto-revert (default 4)
+• `sensor_dry_minutes` — Phase 2 early-stop delay (default 10)
+• `mqtt.min_confidence` — minimum sensor confidence to override stale-
+forecast watchdog
+• `api.auth_enabled` / `api.api_key` — optional write auth
+• `logging.json` — structured JSON logs
+• `notifications.smtp` — email alerts
+• Per-pump `enabled` flag
+• `.env` overrides: `SMARTTHINGS_PAT`, `TUYA_LOCAL_KEY_{PUMP_NAME}`,
+`API_KEY`, `SMTP_PASSWORD`
+
+## 11. Startup and Shutdown
+
+**Startup:** read device state via composite adapter; if device disagrees
+with DB, **device wins** for `device_on` and an `events` reconciliation
+entry is logged. Modes and phases are restored from DB. Pumps not in
+`manual_on` are commanded off if DB says off but device is on.
+
+**Shutdown (SIGTERM):** stop scheduler; command all pumps off except those
+in `manual_on`. In-progress post-rain drain is **aborted** on shutdown
+(logged). Flush DB and disconnect MQTT.
+
+## 12. Changelog
+
+### v1.1.0
+
+• Defined rules engine contract with exact lookahead aggregation semantics.
+• Added decision priority ladder and per-pump phase state machine.
+• Resolved watchdog vs MQTT sensor conflict (sensor exception with
+notification).
+• Clarified duty cycle applies only during pre_rain/running; post-rain drain
+is continuous.
+• Added DB schema, REST API shapes, health endpoint, and concurrency model.
+• Added missing config fields (timezone, manual revert, SMTP, auth, sensor
+dry minutes).
+• Documented NWS as US-only with automatic skip; conservative multi-provider
+blending.
+• Added startup reconciliation rule (device wins for physical state).
+• Added engine-evaluation watchdog, provider health, and Phase 2 float
+switch.
+

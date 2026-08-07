@@ -1,0 +1,82 @@
+<div class="card location-card">
+  <h2>Location</h2>
+  <p class="location-name">{{ status.location.label }}</p>
+  <p class="meta">{{ status.location.latitude | round(4) }}, {{ status.location.longitude | round(4) }} · {{ status.location.timezone }}</p>
+</div>
+
+{% if status.current %}
+<div class="card current-weather">
+  <h2>Current conditions</h2>
+  <div class="current-row">
+    <span class="weather-icon-lg">{{ status.current.weather_code | weather_icon(status.current.is_day) }}</span>
+    <div>
+      <p class="current-temp">{{ status.current.temp_c | round(0) }}°C</p>
+      <p class="meta">{{ status.current.description }} · Humidity {{ status.current.humidity_pct | round(0) }}%</p>
+      {% if status.current.precipitation_mm > 0 %}
+      <p class="meta">Precipitation now: {{ status.current.precipitation_mm }} mm</p>
+      {% endif %}
+    </div>
+    <div class="rain-badge-col">
+      {% if rain.is_raining %}
+      <span class="badge running">Rain detected</span>
+      {% else %}
+      <span class="badge idle">Dry</span>
+      {% endif %}
+      {% if rain.rate_mm_h > 0 %}
+      <p class="meta">{{ rain.rate_mm_h }} mm/h</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% else %}
+<div class="card">
+  <h2>Weather</h2>
+  <p>
+    {% if rain.is_raining %}
+    <span class="badge running">Rain detected</span>
+    {% else %}
+    <span class="badge idle">Dry</span>
+    {% endif %}
+  </p>
+  <p class="meta">Loading current conditions…</p>
+</div>
+{% endif %}
+
+<div class="grid">
+  {% for p in pump_cards %}
+  {% include "partials/pump_card.html" %}
+  {% endfor %}
+</div>
+
+<div class="card">
+  <h2>Rain forecast — next 12 hours</h2>
+  <div class="forecast-labeled">
+    {% for f in status.forecast_12h_local %}
+    <div class="forecast-hour" title="{{ f.pop_pct | round(0) }}% chance, {{ f.rain_mm }} mm">
+      <span class="forecast-bar-mini" style="height:{{ [4, f.pop_pct * 0.48] | max }}px"></span>
+      <span class="forecast-time">{{ f.hour }}</span>
+      <span class="forecast-pop">{{ f.pop_pct | round(0) }}%</span>
+    </div>
+    {% endfor %}
+  </div>
+  <p class="meta" style="margin-top:0.5rem">Bar height = rain probability. Pumps start automatically when rain is expected.</p>
+</div>
+
+{% if status.forecast_7d_local %}
+<div class="card">
+  <h2>7-day outlook</h2>
+  <div class="forecast-week">
+    {% for d in status.forecast_7d_local %}
+    <div class="forecast-day">
+      <span class="day-name">{{ d.day_name }}</span>
+      <span class="day-icon">{{ d.weather_code | weather_icon(true) }}</span>
+      <span class="day-temps">{{ d.temp_max_c | round(0) }}° / {{ d.temp_min_c | round(0) }}°</span>
+      <span class="day-rain">{{ d.pop_max_pct | round(0) }}%</span>
+      {% if d.precip_sum_mm > 0 %}
+      <span class="day-mm">{{ d.precip_sum_mm | round(1) }} mm</span>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}

@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}pumpd{% endblock %}</title>
+  <script src="https://unpkg.com/htmx.org@2.0.3"></script>
+  <style>
+    :root {
+      font-family: system-ui, -apple-system, sans-serif;
+      color: #1a1a1a;
+      background: #f4f6f8;
+      --accent: #2563eb;
+      --accent-hover: #1d4ed8;
+      --admin-accent: #7c3aed;
+      --user-accent: #059669;
+    }
+    * { box-sizing: border-box; }
+    body { max-width: 960px; margin: 0 auto; padding: 1rem; }
+    header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 1.25rem; }
+    .brand { display: flex; align-items: center; gap: 0.85rem; min-width: 0; }
+    .site-logo {
+      display: block;
+      height: 52px;
+      width: auto;
+      max-width: min(220px, 40vw);
+      object-fit: contain;
+      flex-shrink: 0;
+    }
+    .brand-text { min-width: 0; }
+    header h1 { margin: 0; font-size: 1.5rem; }
+    .subtitle { color: #555; margin: 0.15rem 0 0; font-size: 0.9rem; }
+    nav { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    nav a {
+      text-decoration: none;
+      padding: 0.4rem 0.85rem;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: #374151;
+      background: #fff;
+      border: 1px solid #e5e7eb;
+    }
+    nav a:hover { background: #f9fafb; }
+    nav a.active { color: #fff; border-color: transparent; }
+    nav a.nav-user.active { background: var(--user-accent); }
+    nav a.nav-admin.active { background: var(--admin-accent); }
+    .card { background: #fff; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    .card h2 { margin: 0 0 0.75rem; font-size: 1.05rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; }
+    .badge { display: inline-block; padding: 0.2rem 0.55rem; border-radius: 4px; font-size: 0.85rem; font-weight: 500; }
+    .badge.on, .badge.ok, .badge.running, .badge.online { background: #d1fae5; color: #065f46; }
+    .badge.off, .badge.idle, .badge.unconfigured { background: #f3f4f6; color: #4b5563; }
+    .badge.warn, .badge.degraded, .badge.unknown { background: #fef3c7; color: #92400e; }
+    .badge.fault, .badge.fail, .badge.offline { background: #fee2e2; color: #991b1b; }
+    .badge.drain { background: #dbeafe; color: #1e40af; }
+    .badge.manual { background: #ede9fe; color: #5b21b6; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+    td, th { text-align: left; padding: 0.4rem 0.35rem; border-bottom: 1px solid #eee; }
+    th { color: #6b7280; font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.02em; }
+    button, .btn {
+      margin-right: 0.35rem;
+      margin-bottom: 0.35rem;
+      padding: 0.4rem 0.75rem;
+      cursor: pointer;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      background: #fff;
+      font-size: 0.875rem;
+    }
+    button:hover, .btn:hover { background: #f9fafb; }
+    button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    button.primary:hover { background: var(--accent-hover); }
+    button.danger { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+    .pump-mode-buttons { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+    .pump-mode-buttons .mode-btn { margin: 0; }
+    button.mode-btn.is-active {
+      font-weight: 600;
+      box-shadow: inset 0 0 0 2px currentColor;
+    }
+    button.mode-btn.mode-auto.is-active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+      box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
+    }
+    button.mode-btn.mode-on.is-active {
+      background: #ede9fe;
+      border-color: #7c3aed;
+      color: #5b21b6;
+    }
+    button.mode-btn.mode-off.is-active {
+      background: #fef2f2;
+      border-color: #dc2626;
+      color: #991b1b;
+    }
+    button.mode-btn.htmx-request {
+      opacity: 1;
+      cursor: wait;
+      pointer-events: none;
+      font-weight: 600;
+      padding-left: 1.85rem;
+      position: relative;
+    }
+    button.mode-btn.htmx-request::before {
+      content: '';
+      position: absolute;
+      left: 0.55rem;
+      top: 50%;
+      width: 0.85rem;
+      height: 0.85rem;
+      margin-top: -0.425rem;
+      border: 2px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 50%;
+      opacity: 0.85;
+      animation: cmd-spin 0.7s linear infinite;
+    }
+    button.mode-btn.htmx-request.is-active {
+      opacity: 1;
+    }
+    .pump-card-busy .pump-mode-buttons .mode-btn:not(.htmx-request) {
+      opacity: 0.45;
+      pointer-events: none;
+    }
+    .pump-command-status {
+      display: none;
+      margin: 0.55rem 0 0;
+      padding: 0.55rem 0.7rem;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      line-height: 1.35;
+    }
+    .pump-command-status.is-pending {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      color: #1e40af;
+    }
+    .pump-command-status.is-pending.is-retry-hint {
+      background: #fffbeb;
+      border-color: #fcd34d;
+      color: #92400e;
+    }
+    .pump-command-status.is-ok {
+      display: block;
+      background: #ecfdf5;
+      border: 1px solid #a7f3d0;
+      color: #065f46;
+    }
+    .pump-command-status.is-error {
+      display: block;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      color: #991b1b;
+    }
+    .cmd-spinner {
+      flex-shrink: 0;
+      width: 0.95rem;
+      height: 0.95rem;
+      border: 2px solid #93c5fd;
+      border-top-color: #2563eb;
+      border-radius: 50%;
+      animation: cmd-spin 0.7s linear infinite;
+    }
+    @keyframes cmd-spin { to { transform: rotate(360deg); } }
+    .meta { color: #6b7280; font-size: 0.875rem; margin: 0.25rem 0; }
+    .forecast-bar { display: flex; gap: 2px; height: 48px; align-items: flex-end; }
+    .forecast-bar span { flex: 1; background: #93c5fd; border-radius: 2px 2px 0 0; min-height: 4px; }
+    .location-name { font-size: 1.15rem; font-weight: 600; margin: 0.25rem 0; }
+    .current-row { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; }
+    .weather-icon-lg { font-size: 2.75rem; line-height: 1; }
+    .current-temp { font-size: 2rem; font-weight: 600; margin: 0; }
+    .rain-badge-col { margin-left: auto; text-align: right; }
+    .forecast-labeled { display: flex; gap: 4px; align-items: flex-end; overflow-x: auto; padding-bottom: 0.25rem; }
+    .forecast-hour { display: flex; flex-direction: column; align-items: center; min-width: 36px; font-size: 0.7rem; color: #6b7280; }
+    .forecast-bar-mini { width: 100%; background: #93c5fd; border-radius: 2px 2px 0 0; min-height: 4px; }
+    .forecast-time { margin-top: 0.25rem; font-weight: 600; color: #374151; }
+    .forecast-pop { color: #2563eb; }
+    .forecast-week { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 0.5rem; }
+    .forecast-day { display: flex; flex-direction: column; align-items: center; padding: 0.5rem; background: #f9fafb; border-radius: 6px; font-size: 0.8rem; text-align: center; gap: 0.15rem; }
+    .day-name { font-weight: 600; color: #374151; }
+    .day-icon { font-size: 1.5rem; }
+    .day-temps { color: #4b5563; }
+    .day-rain { color: #2563eb; font-weight: 500; }
+    .day-mm { color: #6b7280; font-size: 0.75rem; }
+    .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; }
+    .health-item { padding: 0.65rem; background: #f9fafb; border-radius: 6px; text-align: center; }
+    .health-item .label { font-size: 0.75rem; color: #6b7280; text-transform: uppercase; }
+    .health-item .value { font-size: 1.1rem; font-weight: 600; margin-top: 0.25rem; }
+    .override-box { margin-top: 0.75rem; padding: 0.65rem; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; font-size: 0.85rem; }
+    .override-box label { display: flex; align-items: center; gap: 0.4rem; cursor: pointer; }
+  </style>
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <a href="/user" title="N·E·W Christian Academy">
+        <img
+          src="/static/images/newca-logo.png"
+          alt="N·E·W Christian Academy"
+          class="site-logo"
+        >
+      </a>
+      <div class="brand-text">
+        <h1>{% block heading %}Rain Roof Pumps{% endblock %}</h1>
+        <p class="subtitle">{% block subtitle %}Rain pump controller{% endblock %}</p>
+      </div>
+    </div>
+    <nav>
+      <a href="/user" class="nav-user {% if active_nav == 'user' %}active{% endif %}">User</a>
+      <a href="/admin" class="nav-admin {% if active_nav == 'admin' %}active{% endif %}">Admin</a>
+    </nav>
+  </header>
+  {% block content %}{% endblock %}
+  <script>
+  (function() {
+    function controlTarget() {
+      const mode = document.body.dataset.controlMode || 'auto';
+      if (mode === 'cloud') return 'Tuya cloud';
+      if (mode === 'local') return 'the device on your network';
+      return 'the device (cloud or local)';
+    }
+
+    function modeLabel(btn) {
+      return btn.dataset.modeAction || btn.textContent.trim();
+    }
+
+    function getPumpCard(btn) {
+      return btn.closest('.pump-card');
+    }
+
+    function getStatusEl(card) {
+      return card && card.querySelector('.pump-command-status');
+    }
+
+    function restoreButtonLabel(btn) {
+      if (btn.dataset.originalLabel) {
+        btn.textContent = btn.dataset.originalLabel;
+      }
+    }
+
+    function commandTimeoutMs() {
+      const ms = Number(document.body.dataset.commandTimeoutMs);
+      return Number.isFinite(ms) && ms > 0 ? ms : 10000;
+    }
+
+    function showRetryHint(card, status, actionLabel) {
+      status.className = 'pump-command-status is-pending is-retry-hint';
+      status.innerHTML =
+        '<span class="cmd-spinner" aria-hidden="true"></span>' +
+        '<span>Initial request timed out — querying device status and retrying ' +
+        '<strong>' + actionLabel + '</strong> on ' + controlTarget() + '…</span>';
+    }
+
+    function clearCommandHintTimer(btn) {
+      const timerId = btn.dataset.commandHintTimer;
+      if (timerId) {
+        clearTimeout(Number(timerId));
+        delete btn.dataset.commandHintTimer;
+      }
+    }
+
+    function parseResponseBody(xhr) {
+      if (!xhr || !xhr.responseText) return null;
+      try {
+        return JSON.parse(xhr.responseText);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function formatErrorMessage(xhr) {
+      const body = parseResponseBody(xhr);
+      if (body && typeof body.detail === 'string') {
+        return body.detail;
+      }
+      if (body && body.detail && typeof body.detail.message === 'string') {
+        return body.detail.message;
+      }
+      return 'Command failed — please try again';
+    }
+
+    document.body.addEventListener('htmx:beforeRequest', function(evt) {
+      const btn = evt.detail.elt;
+      if (!btn.classList || !btn.classList.contains('mode-btn')) return;
+
+      const card = getPumpCard(btn);
+      const status = getStatusEl(card);
+      if (!card || !status) return;
+
+      if (!btn.dataset.originalLabel) {
+        btn.dataset.originalLabel = btn.textContent.trim();
+      }
+      btn.textContent = 'Sending…';
+
+      card.classList.add('pump-card-busy');
+      status.hidden = false;
+      status.className = 'pump-command-status is-pending';
+      status.innerHTML =
+        '<span class="cmd-spinner" aria-hidden="true"></span>' +
+        '<span>Sending <strong>' + modeLabel(btn) + '</strong> — waiting for response from ' +
+        controlTarget() + '…</span>';
+
+      clearCommandHintTimer(btn);
+      btn.dataset.commandHintTimer = String(setTimeout(function() {
+        if (card.classList.contains('pump-card-busy')) {
+          showRetryHint(card, status, modeLabel(btn));
+        }
+      }, commandTimeoutMs()));
+    });
+
+    document.body.addEventListener('htmx:afterRequest', function(evt) {
+      const btn = evt.detail.elt;
+      if (!btn.classList || !btn.classList.contains('mode-btn')) return;
+
+      const card = getPumpCard(btn);
+      const status = getStatusEl(card);
+      if (!card || !status) return;
+
+      clearCommandHintTimer(btn);
+      restoreButtonLabel(btn);
+      card.classList.remove('pump-card-busy');
+
+      const body = parseResponseBody(evt.detail.xhr);
+
+      if (evt.detail.successful) {
+        status.className = 'pump-command-status is-ok';
+        if (body && body.command && body.command.retried) {
+          status.textContent = body.command.message || 'Command succeeded after retry — updating status…';
+        } else {
+          status.textContent = 'Command accepted — updating status…';
+        }
+        return;
+      }
+
+      status.className = 'pump-command-status is-error';
+      status.textContent = formatErrorMessage(evt.detail.xhr);
+    });
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+# Local secrets and device credentials
+pumpd/.env
+pumpd/config.yaml
+pumpd/credentials/*.json
+devices.json
+tinytuya.json
+tuya-raw.json
+snapshot.json
+
+# Runtime and local data
+pumpd/data/
+data/
+*.db
+
+# Python
+pumpd/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editor
+*.swo
+*.swp

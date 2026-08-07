@@ -1,0 +1,83 @@
+{# Shared pump card — include with: p, admin (bool) #}
+<div class="card pump-card" id="pump-card-{{ p.name }}">
+  <h2>{% if admin %}{{ p.name }}{% else %}{{ p.name | replace('_', ' ') | title }}{% endif %}</h2>
+  <p class="pump-status-line">
+    <span class="badge {{ p.online_status }}" title="Connection to device">{{ p.online_status | replace('_', ' ') | title }}</span>
+    ·
+    {% if p.mode == 'manual_on' %}
+    <span class="badge manual">Manual ON</span>
+    {% elif p.mode == 'manual_off' %}
+    <span class="badge manual">Manual OFF</span>
+    {% elif p.device_on and p.phase == 'post_rain_drain' %}
+    <span class="badge drain">Draining</span>
+    {% elif p.device_on %}
+    <span class="badge running">Running</span>
+    {% else %}
+    <span class="badge idle">Standby</span>
+    {% endif %}
+  </p>
+  <p class="meta">
+    Runtime today: {{ p.runtime_today_min }} min
+    {% if p.switch_code and p.switch_code not in ('switch_1', 'switch') %}
+    · outlet: <strong>{{ p.switch_code }}</strong>
+    {% endif %}
+    {% if admin %}
+    · continuous: {{ p.runtime_continuous_min }} min
+    · mode: {{ p.mode }} · phase: {{ p.phase }}
+    · switch: {{ p.switch_code or 'switch_1' }}
+    {% if p.online_detail and p.online_status != 'unconfigured' %} · probe: {{ p.online_detail }}{% endif %}
+    {% if p.safety_override_approved %} · <span class="badge warn">safety override</span>{% endif %}
+    {% if p.hardware_status and p.hardware_status != 'ok' %} · HW: <span class="badge {{ p.hardware_status }}">{{ p.hardware_status }}</span>{% endif %}
+    {% endif %}
+  </p>
+  <div class="pump-mode-buttons" role="group" aria-label="Pump mode for {{ p.name }}">
+    <button type="button"
+            class="mode-btn mode-auto{% if p.mode == 'auto' %} is-active{% endif %}"
+            data-mode-action="Auto"
+            hx-post="/api/pumps/{{ p.name }}/mode"
+            hx-vals='{"mode": "auto"}'
+            hx-swap="none"
+            hx-on::after-request="if(event.detail.successful) htmx.trigger('#status-panel', 'load')">
+      Auto
+    </button>
+    <button type="button"
+            class="mode-btn mode-on{% if p.mode == 'manual_on' %} is-active{% endif %}"
+            data-mode-action="Manual ON"
+            hx-post="/api/pumps/{{ p.name }}/mode"
+            hx-vals='{"mode": "manual_on"}'
+            hx-swap="none"
+            hx-on::after-request="if(event.detail.successful) htmx.trigger('#status-panel', 'load')">
+      Manual ON
+    </button>
+    <button type="button"
+            class="mode-btn mode-off{% if p.mode == 'manual_off' %} is-active{% endif %}"
+            data-mode-action="Manual OFF"
+            hx-post="/api/pumps/{{ p.name }}/mode"
+            hx-vals='{"mode": "manual_off"}'
+            hx-swap="none"
+            hx-on::after-request="if(event.detail.successful) htmx.trigger('#status-panel', 'load')">
+      Manual OFF
+    </button>
+    {% if admin %}
+    <button type="button" class="danger remove-pump-btn" data-name="{{ p.name }}" title="Remove from pumpd config only (not from Tuya Cloud)">Remove</button>
+    {% endif %}
+  </div>
+  <p class="pump-command-status" hidden aria-live="polite"></p>
+  {% if admin %}
+  <div class="override-box">
+    <label>
+      <input type="checkbox" id="override-{{ p.name }}">
+      Approve safety override on next command
+    </label>
+    <button type="button"
+            class="mode-btn mode-on{% if p.mode == 'manual_on' and p.safety_override_approved %} is-active{% endif %}"
+            data-mode-action="Manual ON (override)"
+            hx-post="/api/pumps/{{ p.name }}/mode"
+            hx-vals='js:{"mode":"manual_on","approve_safety_override":document.getElementById("override-{{ p.name }}").checked}'
+            hx-swap="none"
+            hx-on::after-request="if(event.detail.successful) htmx.trigger('#status-panel', 'load')">
+      Manual ON (with override flag)
+    </button>
+  </div>
+  {% endif %}
+</div>
