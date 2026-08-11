@@ -115,8 +115,9 @@ class CompositePumpDevice(PumpDevice):
                 state = await device.get_state()
                 if state != DeviceState.UNKNOWN:
                     return state
-        for _, device in self._adapters():
+        for adapter_name, device in self._adapters():
             state = await device.get_state()
             if state != DeviceState.UNKNOWN:
+                self._last_adapter = adapter_name
                 return state
         return DeviceState.UNKNOWN

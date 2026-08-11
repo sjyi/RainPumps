@@ -45,6 +45,28 @@ class MerossCloudSession:
         self._manager: Any | None = None
         self._lock = asyncio.Lock()
         self._started = False
+        self._online_cache: dict[str, bool] = {}
+
+    @staticmethod
+    def _info_is_online(info: Any) -> bool:
+        online = getattr(info, "online_status", None)
+        if online is None:
+            return True
+        name = getattr(online, "name", None)
+        if isinstance(name, str):
+            return name == "ONLINE"
+        return str(online).endswith("ONLINE")
+
+    async def online_status_map(self, *, refresh: bool = False) -> dict[str, bool]:
+        """Cached Meross cloud online flags keyed by device UUID."""
+        if refresh or not self._online_cache:
+            devices = await self.list_cloud_devices()
+            self._online_cache = {
+                info.uuid: self._info_is_online(info)
+                for info in devices
+                if getattr(info, "uuid", "")
+            }
+        return dict(self._online_cache)
 
     @property
     def configured(self) -> bool:
@@ -63,16 +85,22 @@ class MerossCloudSession:
             from meross_iot.http_api import MerossHttpClient
             from meross_iot.manager import MerossManager
 
-            self._http = await MerossHttpClient.async_from_user_password(
-                api_base_url=self._api_base_url,
-                email=self._email,
-                password=self._password,
-                mfa_code=self._mfa_code,
-                auto_retry_on_bad_domain=True,
-            )
-            self._manager = MerossManager(http_client=self._http)
-            await self._manager.async_init()
-            await self._manager.async_device_discovery()
+            try:
+                self._http = await MerossHttpClient.async_from_user_password(
+                    api_base_url=self._api_base_url,
+                    email=self._email,
+                    password=self._password,
+                    mfa_code=self._mfa_code,
+                    auto_retry_on_bad_domain=True,
+                )
+                self._manager = MerossManager(http_client=self._http)
+                await self._manager.async_init()
+                await self._manager.async_device_discovery()
+            except Exception:
+                self._manager = None
+                self._http = None
+                self._started = False
+                raise
             self._started = True
 
     async def shutdown(self) -> None:
@@ -130,10 +158,18 @@ class MerossCloudDevice(PumpDevice):
 
     async def _resolve_device(self) -> Any | None:
         if not self._session.started:
-            await self._session.startup()
+            try:
+                await self._session.startup()
+            except Exception:
+                logger.debug("meross session startup failed for %s", self.name, exc_info=True)
+                return None
         dev = self._session.find_device(self.device_uuid)
         if dev is None:
-            await self._session.rediscover()
+            try:
+                await self._session.rediscover()
+            except Exception:
+                logger.debug("meross rediscover failed for %s", self.name, exc_info=True)
+                return None
             dev = self._session.find_device(self.device_uuid)
         return dev
 
@@ -186,14 +222,9 @@ class MerossCloudDevice(PumpDevice):
         if not self._session.configured:
             return False
         try:
-            devices = await self._session.list_cloud_devices()
+            status_map = await self._session.online_status_map()
+            if self.device_uuid in status_map:
+                return status_map[self.device_uuid]
         except Exception:
-            return False
-        for info in devices:
-            if info.uuid != self.device_uuid:
-                continue
-            online = getattr(info, "online_status", None)
-            if online is None:
-                return True
-            return str(online).endswith("ONLINE")
+            logger.debug("meross online lookup failed for %s", self.name, exc_info=True)
         return False

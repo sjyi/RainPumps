@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
@@ -117,6 +118,9 @@ class PumpService:
         self.rain_simulation = RainSimulationState()
         self._simulation_task: asyncio.Task[None] | None = None
         self._simulation_drain_backup: int | None = None
+        self._online_probe_cache: dict[str, dict[str, str]] | None = None
+        self._online_probe_cache_at: float = 0.0
+        self._online_probe_cache_ttl = 30.0
         self._build_devices()
 
     def _create_tuya_cloud_client(self) -> Any | None:
@@ -466,37 +470,42 @@ class PumpService:
         )
         return saved
 
-    async def probe_pumps_online(self) -> dict[str, dict[str, str]]:
-        """Probe each configured pump for LAN/cloud reachability."""
+    async def probe_pumps_online(
+        self, *, force: bool = False, cache_ttl: float | None = None
+    ) -> dict[str, dict[str, str]]:
+        """Probe each configured pump by reading live switch state."""
+        now = time.monotonic()
+        ttl = self._online_probe_cache_ttl if cache_ttl is None else cache_ttl
+        if (
+            not force
+            and self._online_probe_cache is not None
+            and now - self._online_probe_cache_at < ttl
+        ):
+            return self._online_probe_cache
+
+        if self.meross_session.configured and any(
+            p.meross.device_uuid for p in self.config.pumps
+        ):
+            if not self.meross_session.started:
+                try:
+                    await asyncio.wait_for(self.meross_session.startup(), timeout=15.0)
+                except Exception:
+                    logger.debug("meross startup before online probe failed", exc_info=True)
+
+        probe_timeout = 10.0
+        sem = asyncio.Semaphore(4)
 
         async def probe_one(name: str) -> dict[str, str]:
             device = self.devices.get(name)
             if device is None or not device.has_control_path():
                 return {"status": "unconfigured", "detail": "missing credentials"}
-            timeout = 5.0
-            if device.tuya_cloud and isinstance(device.tuya_cloud, TuyaCloudDevice):
-                timeout = 5.0 if not device.tuya else 3.0
+            async with sem:
                 try:
-                    reachable = await asyncio.wait_for(device.tuya_cloud.is_reachable(), timeout=timeout)
-                    if not reachable:
-                        return {"status": "offline", "detail": "cloud:device offline"}
+                    state = await asyncio.wait_for(device.get_state(), timeout=probe_timeout)
                 except TimeoutError:
-                    return {"status": "offline", "detail": "cloud:timeout"}
-            elif device.meross_cloud and isinstance(device.meross_cloud, MerossCloudDevice):
-                try:
-                    reachable = await asyncio.wait_for(
-                        device.meross_cloud.is_reachable(), timeout=timeout
-                    )
-                    if not reachable:
-                        return {"status": "offline", "detail": "meross_cloud:device offline"}
-                except TimeoutError:
-                    return {"status": "offline", "detail": "meross_cloud:timeout"}
-            try:
-                state = await asyncio.wait_for(device.get_state(), timeout=timeout)
-            except TimeoutError:
-                return {"status": "offline", "detail": "timeout"}
-            except Exception as exc:
-                return {"status": "offline", "detail": str(exc)}
+                    return {"status": "offline", "detail": "timeout"}
+                except Exception as exc:
+                    return {"status": "offline", "detail": str(exc)}
             if state == DeviceState.UNKNOWN:
                 return {"status": "offline", "detail": "unreachable"}
             adapter = device._last_adapter or "device"
@@ -504,7 +513,10 @@ class PumpService:
 
         names = [p.name for p in self.config.pumps]
         results = await asyncio.gather(*(probe_one(name) for name in names))
-        return dict(zip(names, results, strict=True))
+        cached = dict(zip(names, results, strict=True))
+        self._online_probe_cache = cached
+        self._online_probe_cache_at = now
+        return cached
 
     async def get_pump_cards(self) -> list[dict[str, Any]]:
         """Pump rows enriched with live online status for dashboard cards."""

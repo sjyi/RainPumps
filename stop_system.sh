@@ -29,7 +29,15 @@ fi
 cd "${PUMPD_DIR}"
 
 if ! "${COMPOSE[@]}" ps -q 2>/dev/null | grep -q .; then
-  log "No running containers for this stack — nothing to stop"
+  ORPHAN_HELPER="${SCRIPT_DIR}/pumpd_port_orphans.sh"
+  if [[ -x "${ORPHAN_HELPER}" ]]; then
+    "${ORPHAN_HELPER}"
+  elif ss -tln 2>/dev/null | grep -q ':8080 '; then
+    log "No compose containers running, but port 8080 is still in use"
+    log "Inspect with: sudo lsof -i:8080"
+  else
+    log "No running containers for this stack — nothing to stop"
+  fi
   exit 0
 fi
 
