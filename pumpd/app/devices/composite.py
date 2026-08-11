@@ -18,12 +18,14 @@ class CompositePumpDevice(PumpDevice):
         smartthings: PumpDevice | None = None,
         *,
         tuya_cloud: PumpDevice | None = None,
+        meross_cloud: PumpDevice | None = None,
         control_mode: str = "auto",
         retries: int = 3,
     ) -> None:
         self.name = name
         self.tuya = tuya
         self.tuya_cloud = tuya_cloud
+        self.meross_cloud = meross_cloud
         self.smartthings = smartthings
         self.control_mode = control_mode
         self.retries = retries
@@ -32,13 +34,14 @@ class CompositePumpDevice(PumpDevice):
     def _adapters(self) -> list[tuple[str, PumpDevice]]:
         local = ("tuya_local", self.tuya)
         cloud = ("tuya_cloud", self.tuya_cloud)
+        meross = ("meross_cloud", self.meross_cloud)
         st = ("smartthings", self.smartthings)
         if self.control_mode == "cloud":
-            chain = [cloud, st]
+            chain = [cloud, meross, st]
         elif self.control_mode == "local":
-            chain = [local, st]
+            chain = [local, meross, st]
         else:
-            chain = [local, cloud, st]
+            chain = [local, cloud, meross, st]
         return [(name, device) for name, device in chain if device is not None]
 
     def has_control_path(self) -> bool:
@@ -89,6 +92,7 @@ class CompositePumpDevice(PumpDevice):
         mapping = {
             "tuya_local": self.tuya,
             "tuya_cloud": self.tuya_cloud,
+            "meross_cloud": self.meross_cloud,
             "smartthings": self.smartthings,
         }
         return mapping.get(adapter_name)

@@ -1,4 +1,4 @@
-"""Stagger turn-on across switches on the same Tuya device."""
+"""Stagger turn-on across switches on the same physical plug."""
 
 from __future__ import annotations
 
@@ -17,24 +17,40 @@ def switch_index(switch_code: str) -> int:
     return 0
 
 
-def pump_tuya_device_id(pump: PumpConfig | None) -> str:
+def pump_switch_code(pump: PumpConfig | None) -> str:
+    if pump is None:
+        return "switch_1"
+    if pump.meross.device_uuid:
+        return pump.meross.switch_code or f"switch_{pump.meross.channel + 1}"
+    return pump.tuya.switch_code or "switch_1"
+
+
+def pump_physical_device_id(pump: PumpConfig | None) -> str:
+    """Shared device id for stagger grouping (Tuya device_id or Meross uuid)."""
     if pump is None:
         return ""
-    return pump.tuya.device_id.strip()
+    if pump.tuya.device_id.strip():
+        return pump.tuya.device_id.strip()
+    return pump.meross.device_uuid.strip()
+
+
+def pump_tuya_device_id(pump: PumpConfig | None) -> str:
+    """Backward-compatible alias."""
+    return pump_physical_device_id(pump)
 
 
 def group_turn_on_commands(
     commands: list[PumpCommand],
     pumps_by_name: dict[str, PumpConfig],
 ) -> tuple[list[PumpCommand], dict[str, list[PumpCommand]]]:
-    """Split turn_on commands into singles vs groups sharing a Tuya device_id."""
+    """Split turn_on commands into singles vs groups sharing one physical plug."""
     singles: list[PumpCommand] = []
     by_device: dict[str, list[PumpCommand]] = defaultdict(list)
     for cmd in commands:
         if cmd.action != "turn_on":
             continue
         pump = pumps_by_name.get(cmd.pump_name)
-        device_id = pump_tuya_device_id(pump)
+        device_id = pump_physical_device_id(pump)
         if device_id:
             by_device[device_id].append(cmd)
         else:
@@ -46,11 +62,12 @@ def sort_commands_by_switch(
     commands: list[PumpCommand],
     pumps_by_name: dict[str, PumpConfig],
 ) -> list[PumpCommand]:
-    return sorted(
-        commands,
-        key=lambda cmd: switch_index(
-            pumps_by_name[cmd.pump_name].tuya.switch_code
-            if cmd.pump_name in pumps_by_name
-            else "switch_1"
-        ),
-    )
+    def sort_key(cmd: PumpCommand) -> int:
+        pump = pumps_by_name.get(cmd.pump_name)
+        if pump and pump.meross.device_uuid:
+            if pump.meross.switch_code:
+                return switch_index(pump.meross.switch_code)
+            return pump.meross.channel
+        return switch_index(pump_switch_code(pump))
+
+    return sorted(commands, key=sort_key)

@@ -21,6 +21,7 @@ from app.config import AppConfig, LocationConfig, PumpConfig, remove_pump, save_
 from app.device_import import load_tuya_cloud_credentials, resolve_credential_paths
 from app.devices.base import CommandResult, DeviceState
 from app.devices.composite import CompositePumpDevice
+from app.devices.meross_cloud import MerossCloudDevice, MerossCloudSession
 from app.devices.smartthings import SmartThingsDevice
 from app.devices.tuya_cloud import TuyaCloudDevice
 from app.devices.tuya_local import TuyaLocalDevice
@@ -85,6 +86,10 @@ class PumpService:
         tuya_api_secret: str = "",
         tuya_api_region: str = "us",
         tuya_api_device_id: str = "",
+        meross_email: str = "",
+        meross_password: str = "",
+        meross_api_base: str = "https://iotx-us.meross.com",
+        meross_mfa_code: str = "",
         config_path: str = "config.yaml",
     ) -> None:
         self.config = config
@@ -96,6 +101,12 @@ class PumpService:
         self.tuya_api_region = tuya_api_region
         self.tuya_api_device_id = tuya_api_device_id
         self.tuya_cloud_client = self._create_tuya_cloud_client()
+        self.meross_session = MerossCloudSession(
+            email=meross_email,
+            password=meross_password,
+            api_base_url=meross_api_base,
+            mfa_code=meross_mfa_code,
+        )
         self.notifier = Notifier(config)
         self.hardware = HardwareMonitor(config, session_factory)
         self.devices: dict[str, CompositePumpDevice] = {}
@@ -140,6 +151,7 @@ class PumpService:
         mode = self.config.devices.control_mode
         use_local = mode in ("local", "auto")
         use_cloud = mode in ("cloud", "auto") and self.tuya_cloud_client is not None
+        use_meross = self.meross_session.configured and mode in ("local", "cloud", "auto")
         for pump in self.config.pumps:
             tuya_local = None
             if use_local and pump.tuya.device_id and pump.tuya.ip and pump.tuya.local_key:
@@ -159,6 +171,14 @@ class PumpService:
                     self.tuya_cloud_client,
                     switch_code=pump.tuya.switch_code,
                 )
+            meross_cloud = None
+            if use_meross and pump.meross.device_uuid:
+                meross_cloud = MerossCloudDevice(
+                    pump.name,
+                    pump.meross.device_uuid,
+                    pump.meross.channel,
+                    self.meross_session,
+                )
             st = None
             if pump.smartthings.device_id and self.smartthings_pat:
                 st = SmartThingsDevice(pump.name, pump.smartthings.device_id, self.smartthings_pat)
@@ -167,6 +187,7 @@ class PumpService:
                 tuya_local,
                 st,
                 tuya_cloud=tuya_cloud,
+                meross_cloud=meross_cloud,
                 control_mode=mode,
             )
             self.locks[pump.name] = asyncio.Lock()
@@ -185,6 +206,13 @@ class PumpService:
 
     async def startup(self) -> None:
         await self.mqtt_signal.start()
+        if self.meross_session.configured and any(
+            p.meross.device_uuid for p in self.config.pumps
+        ):
+            try:
+                await self.meross_session.startup()
+            except Exception:
+                logger.exception("failed to initialize Meross cloud session")
         self._ensure_pump_rows()
         await self.reconcile_devices()
         await self.poll_forecasts()
@@ -213,6 +241,7 @@ class PumpService:
                             session=session,
                         )
                     session.commit()
+        await self.meross_session.shutdown()
         await self.mqtt_signal.stop()
 
     def _ensure_pump_rows(self) -> None:
@@ -327,6 +356,7 @@ class PumpService:
 
         if all_forecasts:
             logger.info("stored forecasts from %d providers", len(all_forecasts))
+            await self.run_evaluation()
 
         await self._poll_display_weather(lat, lon)
 
@@ -398,6 +428,14 @@ class PumpService:
         saved = save_pumps(self.config_path, pumps, mode=mode)  # type: ignore[arg-type]
         self.config.pumps = saved
         self._build_devices()
+        if self.meross_session.configured and any(
+            p.meross.device_uuid for p in self.config.pumps
+        ):
+            if not self.meross_session.started:
+                try:
+                    await self.meross_session.startup()
+                except Exception:
+                    logger.exception("failed to initialize Meross cloud session after import")
         self._ensure_pump_rows()
         self._log_event(
             None,
@@ -435,14 +473,24 @@ class PumpService:
             device = self.devices.get(name)
             if device is None or not device.has_control_path():
                 return {"status": "unconfigured", "detail": "missing credentials"}
-            timeout = 5.0 if device.tuya_cloud and not device.tuya else 3.0
+            timeout = 5.0
             if device.tuya_cloud and isinstance(device.tuya_cloud, TuyaCloudDevice):
+                timeout = 5.0 if not device.tuya else 3.0
                 try:
                     reachable = await asyncio.wait_for(device.tuya_cloud.is_reachable(), timeout=timeout)
                     if not reachable:
                         return {"status": "offline", "detail": "cloud:device offline"}
                 except TimeoutError:
                     return {"status": "offline", "detail": "cloud:timeout"}
+            elif device.meross_cloud and isinstance(device.meross_cloud, MerossCloudDevice):
+                try:
+                    reachable = await asyncio.wait_for(
+                        device.meross_cloud.is_reachable(), timeout=timeout
+                    )
+                    if not reachable:
+                        return {"status": "offline", "detail": "meross_cloud:device offline"}
+                except TimeoutError:
+                    return {"status": "offline", "detail": "meross_cloud:timeout"}
             try:
                 state = await asyncio.wait_for(device.get_state(), timeout=timeout)
             except TimeoutError:
@@ -470,6 +518,12 @@ class PumpService:
             row = state_by_name.get(cfg.name)
             online = online_map.get(cfg.name, {"status": "unknown", "detail": ""})
             hw = hw_map.get(cfg.name)
+            switch_code = (
+                cfg.meross.switch_code or f"switch_{cfg.meross.channel + 1}"
+                if cfg.meross.device_uuid
+                else cfg.tuya.switch_code or "switch_1"
+            )
+            device_id = cfg.meross.device_uuid or cfg.tuya.device_id
             cards.append(
                 {
                     "name": cfg.name,
@@ -483,8 +537,15 @@ class PumpService:
                     "online_status": online["status"],
                     "online_detail": online.get("detail", ""),
                     "hardware_status": hw["status"] if hw else None,
-                    "switch_code": cfg.tuya.switch_code or "switch_1",
-                    "device_id": cfg.tuya.device_id,
+                    "switch_code": switch_code,
+                    "device_id": device_id,
+                    "device_backend": (
+                        "meross"
+                        if cfg.meross.device_uuid
+                        else "tuya"
+                        if cfg.tuya.device_id
+                        else ""
+                    ),
                 }
             )
         return cards

@@ -37,6 +37,10 @@ pumps:
       local_key: ""
       version: 3.4
       switch_code: switch_1  # switch_2, switch_3 for multi-outlet plugs
+    meross:
+      device_uuid: ""       # from Admin → Import pumps (Meross cloud)
+      channel: 0            # 0 = first outlet, 1 = second, …
+      switch_code: switch_1
     smartthings:
       device_id: ""
 
@@ -75,7 +79,7 @@ logging:
   json: false
 
 devices:
-  # local = LAN first | cloud = Tuya Cloud + SmartThings | auto = LAN, cloud, ST
+  # local = LAN first | cloud = Tuya/Meross cloud + SmartThings | auto = all paths
   control_mode: auto
   # Delay between turning on switch_2, switch_3, … on the same multi-outlet plug
   switch_stagger_seconds: 30

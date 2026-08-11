@@ -64,6 +64,42 @@ def test_user_partial_returns_html(client: TestClient) -> None:
     assert "forecast" in response.text.lower()
 
 
+def test_admin_ui_has_auto_import(client: TestClient) -> None:
+    response = client.get("/admin")
+    assert response.status_code == 200
+    assert "Sync all devices" in response.text
+    assert "auto-import-devices-btn" in response.text
+
+
+def test_auto_import_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.config import PumpConfig
+
+    async def fake_auto_import(**kwargs: object) -> dict:
+        pump = PumpConfig(name="meross_pump")
+        return {
+            "pumps": [pump],
+            "stats": {"added": 1, "updated": 0, "skipped": 0, "discovered": 1},
+            "discovery": {
+                "devices": [{"label": "Test", "meross_device_uuid": "abc"}],
+                "sources": {},
+                "errors": {},
+                "setup": {"ready": True},
+            },
+        }
+
+    monkeypatch.setattr("app.web.routes.auto_import_devices", fake_auto_import)
+    monkeypatch.setattr(
+        "app.service.PumpService.import_pumps",
+        AsyncMock(return_value=[PumpConfig(name="meross_pump")]),
+    )
+
+    response = client.post("/api/devices/auto-import?lan_scan=false")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["stats"]["added"] == 1
+    assert data["message"].startswith("Synced 1 pump")
+
+
 def test_health_always_unauthenticated(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code in (200, 503)

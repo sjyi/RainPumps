@@ -12,6 +12,8 @@ from typing import Any, Literal
 
 import httpx
 
+from app.config import PumpConfig
+
 logger = logging.getLogger(__name__)
 
 ST_BASE = "https://api.smartthings.com/v1"
@@ -20,7 +22,7 @@ SWITCH_CAPABILITIES = {"switch", "outlet", "relaySwitch"}
 
 @dataclass
 class DiscoveredDevice:
-    source: Literal["smartthings", "tuya_cloud", "tuya_lan", "tuya_json"]
+    source: Literal["smartthings", "tuya_cloud", "tuya_lan", "tuya_json", "meross_cloud"]
     label: str
     tuya_device_id: str = ""
     tuya_ip: str = ""
@@ -28,11 +30,15 @@ class DiscoveredDevice:
     tuya_version: float = 3.4
     tuya_switch_code: str = ""
     tuya_switch_dp: str = ""
+    meross_device_uuid: str = ""
+    meross_channel: int = 0
+    meross_switch_code: str = ""
     smartthings_device_id: str = ""
     match_key: str = ""  # normalized name for auto-pairing
     raw: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        switch_code = self.tuya_switch_code or self.meross_switch_code or "switch_1"
         return {
             "source": self.source,
             "label": self.label,
@@ -42,10 +48,15 @@ class DiscoveredDevice:
             "tuya_version": self.tuya_version,
             "tuya_switch_code": self.tuya_switch_code,
             "tuya_switch_dp": self.tuya_switch_dp,
+            "meross_device_uuid": self.meross_device_uuid,
+            "meross_channel": self.meross_channel,
+            "meross_switch_code": self.meross_switch_code,
             "smartthings_device_id": self.smartthings_device_id,
             "match_key": self.match_key,
+            "switch_code": switch_code,
             "configured": bool(
                 (self.tuya_device_id and self.tuya_ip and self.tuya_local_key)
+                or self.meross_device_uuid
                 or self.smartthings_device_id
             ),
         }
@@ -243,6 +254,8 @@ def get_import_setup_status(
     tuya_api_secret: str = "",
     tuya_api_region: str = "",
     tuya_api_device_id: str = "",
+    meross_email: str = "",
+    meross_password: str = "",
     paths: dict[str, Path | None] | None = None,
 ) -> dict[str, Any]:
     """Report which import sources are configured (no network calls)."""
@@ -260,6 +273,7 @@ def get_import_setup_status(
     )
     has_st = bool(smartthings_pat.strip())
     has_tuya_cloud = bool(key and secret)
+    has_meross = bool(meross_email.strip() and meross_password)
     has_devices_json = devices_path is not None and devices_path.exists()
     has_tuya_file = tuya_file is not None
 
@@ -285,6 +299,14 @@ def get_import_setup_status(
             "region": region if has_tuya_cloud else "",
             "device_id_set": bool(device_id),
         },
+        "meross_cloud": {
+            "configured": has_meross,
+            "hint": (
+                "Set MEROSS_EMAIL and MEROSS_PASSWORD in pumpd/.env."
+                if not has_meross
+                else "Meross cloud credentials loaded."
+            ),
+        },
         "tuya_json": {
             "configured": has_devices_json,
             "path": str(devices_path) if devices_path else "",
@@ -299,7 +321,7 @@ def get_import_setup_status(
             "configured": env_path is not None,
             "path": str(env_path) if env_path else "",
         },
-        "ready": has_st or has_tuya_cloud or has_devices_json,
+        "ready": has_st or has_tuya_cloud or has_devices_json or has_meross,
     }
 
 
@@ -545,6 +567,85 @@ def merge_discovered(
     return sorted(merged.values(), key=lambda d: d.label.lower())
 
 
+def expand_meross_channel_devices(devices: list[DiscoveredDevice]) -> list[DiscoveredDevice]:
+    """One import row per Meross outlet (multi-gang plugs)."""
+    from app.devices.meross_cloud import channel_to_switch_code
+
+    expanded: list[DiscoveredDevice] = []
+    for dev in devices:
+        if not dev.meross_device_uuid:
+            expanded.append(dev)
+            continue
+        channels = dev.raw.get("channels") if dev.raw else None
+        if not isinstance(channels, list) or len(channels) <= 1:
+            if not dev.meross_switch_code:
+                dev.meross_switch_code = channel_to_switch_code(dev.meross_channel)
+            expanded.append(dev)
+            continue
+        for index, ch in enumerate(channels):
+            if not isinstance(ch, dict):
+                continue
+            channel = int(ch.get("channel", index))
+            ch_name = str(ch.get("devName") or ch.get("type") or f"channel {channel + 1}")
+            label = dev.label if len(channels) == 1 else f"{dev.label} {ch_name}".strip()
+            expanded.append(
+                DiscoveredDevice(
+                    source="meross_cloud",
+                    label=label,
+                    meross_device_uuid=dev.meross_device_uuid,
+                    meross_channel=channel,
+                    meross_switch_code=channel_to_switch_code(channel),
+                    match_key=f"{dev.meross_device_uuid}_{channel}",
+                    raw=dev.raw,
+                )
+            )
+    return expanded
+
+
+async def discover_meross(
+    *,
+    email: str = "",
+    password: str = "",
+    api_base: str = "https://iotx-us.meross.com",
+    mfa_code: str = "",
+) -> tuple[list[DiscoveredDevice], str | None]:
+    if not email.strip() or not password:
+        return [], None
+    from app.devices.meross_cloud import MerossCloudSession
+
+    session = MerossCloudSession(
+        email=email,
+        password=password,
+        api_base_url=api_base,
+        mfa_code=mfa_code,
+    )
+    try:
+        cloud_devices = await session.list_cloud_devices()
+    except Exception as exc:
+        return [], str(exc)
+    finally:
+        if not session.started:
+            await session.shutdown()
+
+    devices: list[DiscoveredDevice] = []
+    for info in cloud_devices:
+        devices.append(
+            DiscoveredDevice(
+                source="meross_cloud",
+                label=info.dev_name,
+                meross_device_uuid=info.uuid,
+                meross_channel=0,
+                match_key=info.uuid,
+                raw={
+                    "device_type": info.device_type,
+                    "channels": info.channels,
+                    "online_status": getattr(info.online_status, "name", str(info.online_status)),
+                },
+            )
+        )
+    return expand_meross_channel_devices(devices), None
+
+
 async def discover_all(
     *,
     smartthings_pat: str = "",
@@ -552,6 +653,10 @@ async def discover_all(
     tuya_api_secret: str = "",
     tuya_api_region: str = "",
     tuya_api_device_id: str = "",
+    meross_email: str = "",
+    meross_password: str = "",
+    meross_api_base: str = "https://iotx-us.meross.com",
+    meross_mfa_code: str = "",
     tuya_config_file: Path | None = None,
     tuya_devices_file: Path | None = None,
     lan_scan: bool = True,
@@ -565,6 +670,8 @@ async def discover_all(
         tuya_api_secret=tuya_api_secret,
         tuya_api_region=tuya_api_region,
         tuya_api_device_id=tuya_api_device_id,
+        meross_email=meross_email,
+        meross_password=meross_password,
         paths={
             "tinytuya_json": tuya_config_file,
             "devices_json": tuya_devices_file,
@@ -650,12 +757,38 @@ async def discover_all(
             "message": setup["smartthings"]["hint"],
         }
 
+    if meross_email.strip() and meross_password:
+        meross, meross_err = await discover_meross(
+            email=meross_email,
+            password=meross_password,
+            api_base=meross_api_base,
+            mfa_code=meross_mfa_code,
+        )
+        if meross_err:
+            sources["meross_cloud"] = {"status": "error", "count": 0, "message": meross_err}
+        else:
+            sources["meross_cloud"] = {
+                "status": "ok",
+                "count": len(meross),
+                "message": f"Fetched {len(meross)} outlet(s) from Meross cloud",
+            }
+    else:
+        meross = []
+        sources["meross_cloud"] = {
+            "status": "skipped",
+            "count": 0,
+            "message": setup["meross_cloud"]["hint"],
+        }
+
     merged = merge_discovered(smartthings, expand_tuya_switch_devices(dedupe_tuya_devices(tuya_devices)))
+    merged.extend(meross)
+    merged.sort(key=lambda d: d.label.lower())
     return {
         "devices": [d.to_dict() for d in merged],
         "counts": {
             "smartthings": len(smartthings),
             "tuya": len(tuya_devices),
+            "meross": len(meross),
             "merged": len(merged),
         },
         "sources": sources,
@@ -666,4 +799,180 @@ async def discover_all(
             for k, v in sources.items()
             if v.get("status") == "error"
         },
+    }
+
+
+def discovered_device_key(data: dict[str, Any]) -> str:
+    meross_uuid = str(data.get("meross_device_uuid") or "").strip()
+    if meross_uuid:
+        channel = int(data.get("meross_channel") or 0)
+        return f"meross:{meross_uuid}:{channel}"
+    tuya_id = str(data.get("tuya_device_id") or "").strip()
+    if tuya_id:
+        switch = str(data.get("tuya_switch_code") or data.get("switch_code") or "switch_1")
+        return f"tuya:{tuya_id}:{switch}"
+    st_id = str(data.get("smartthings_device_id") or "").strip()
+    if st_id:
+        return f"st:{st_id}"
+    return ""
+
+
+def pump_config_key(pump: PumpConfig) -> str:
+    if pump.meross.device_uuid.strip():
+        return f"meross:{pump.meross.device_uuid.strip()}:{pump.meross.channel}"
+    if pump.tuya.device_id.strip():
+        switch = pump.tuya.switch_code or "switch_1"
+        return f"tuya:{pump.tuya.device_id.strip()}:{switch}"
+    if pump.smartthings.device_id.strip():
+        return f"st:{pump.smartthings.device_id.strip()}"
+    return ""
+
+
+def annotate_discovered_system_status(
+    devices: list[dict[str, Any]],
+    existing: list[PumpConfig],
+) -> list[dict[str, Any]]:
+    """Mark each discovered row as already imported or new (by device identity)."""
+    by_key = {pump_config_key(pump): pump.name for pump in existing if pump_config_key(pump)}
+    annotated: list[dict[str, Any]] = []
+    for data in devices:
+        row = dict(data)
+        key = discovered_device_key(data)
+        if key and key in by_key:
+            row["in_system"] = True
+            row["existing_pump_name"] = by_key[key]
+        else:
+            row["in_system"] = False
+            row["existing_pump_name"] = ""
+        annotated.append(row)
+    return annotated
+
+
+def import_status_counts(devices: list[dict[str, Any]]) -> dict[str, int]:
+    existing = sum(1 for d in devices if d.get("in_system"))
+    return {
+        "total": len(devices),
+        "new": len(devices) - existing,
+        "existing": existing,
+    }
+
+
+def _unique_pump_name(label: str, used: set[str]) -> str:
+    base = slugify_pump_name(label)
+    if base not in used:
+        used.add(base)
+        return base
+    index = 2
+    while True:
+        candidate = f"{base}_{index}"
+        if candidate not in used:
+            used.add(candidate)
+            return candidate
+        index += 1
+
+
+def discovered_dict_to_pump_config(data: dict[str, Any], name: str, *, enabled: bool = True) -> PumpConfig:
+    from app.config import MerossConfig, SmartThingsPumpConfig, TuyaConfig
+
+    switch_code = str(data.get("tuya_switch_code") or data.get("switch_code") or "")
+    meross_switch = str(data.get("meross_switch_code") or "")
+    if not meross_switch and data.get("meross_device_uuid"):
+        from app.devices.meross_cloud import channel_to_switch_code
+
+        meross_switch = channel_to_switch_code(int(data.get("meross_channel") or 0))
+
+    return PumpConfig(
+        name=name,
+        enabled=enabled,
+        tuya=TuyaConfig(
+            device_id=str(data.get("tuya_device_id") or ""),
+            ip=str(data.get("tuya_ip") or ""),
+            local_key=str(data.get("tuya_local_key") or ""),
+            version=float(data.get("tuya_version") or 3.4),
+            switch_code=switch_code,
+        ),
+        meross=MerossConfig(
+            device_uuid=str(data.get("meross_device_uuid") or ""),
+            channel=int(data.get("meross_channel") or 0),
+            switch_code=meross_switch,
+        ),
+        smartthings=SmartThingsPumpConfig(
+            device_id=str(data.get("smartthings_device_id") or ""),
+        ),
+    )
+
+
+def build_auto_import_pumps(
+    discovered: list[dict[str, Any]],
+    existing: list[PumpConfig],
+) -> tuple[list[PumpConfig], dict[str, int]]:
+    """Map discovered devices to pump configs, matching existing pumps by device identity."""
+    existing_by_key = {
+        key: pump for pump in existing if (key := pump_config_key(pump))
+    }
+    used_names = {p.name for p in existing}
+    to_import: list[PumpConfig] = []
+    added = 0
+    updated = 0
+    skipped = 0
+
+    for data in discovered:
+        key = discovered_device_key(data)
+        if not key:
+            skipped += 1
+            continue
+        if key in existing_by_key:
+            current = existing_by_key[key]
+            pump = discovered_dict_to_pump_config(data, current.name, enabled=current.enabled)
+            to_import.append(pump)
+            updated += 1
+        else:
+            name = _unique_pump_name(str(data.get("label") or "pump"), used_names)
+            to_import.append(discovered_dict_to_pump_config(data, name))
+            added += 1
+
+    return to_import, {
+        "added": added,
+        "updated": updated,
+        "skipped": skipped,
+        "discovered": len(discovered),
+    }
+
+
+async def auto_import_devices(
+    *,
+    existing: list[PumpConfig],
+    smartthings_pat: str = "",
+    tuya_api_key: str = "",
+    tuya_api_secret: str = "",
+    tuya_api_region: str = "",
+    tuya_api_device_id: str = "",
+    meross_email: str = "",
+    meross_password: str = "",
+    meross_api_base: str = "https://iotx-us.meross.com",
+    meross_mfa_code: str = "",
+    tuya_config_file: Path | None = None,
+    tuya_devices_file: Path | None = None,
+    lan_scan: bool = True,
+) -> dict[str, Any]:
+    """Discover all configured sources and build pump configs for merge import."""
+    discovery = await discover_all(
+        smartthings_pat=smartthings_pat,
+        tuya_api_key=tuya_api_key,
+        tuya_api_secret=tuya_api_secret,
+        tuya_api_region=tuya_api_region,
+        tuya_api_device_id=tuya_api_device_id,
+        meross_email=meross_email,
+        meross_password=meross_password,
+        meross_api_base=meross_api_base,
+        meross_mfa_code=meross_mfa_code,
+        tuya_config_file=tuya_config_file,
+        tuya_devices_file=tuya_devices_file,
+        lan_scan=lan_scan,
+    )
+    pumps, stats = build_auto_import_pumps(discovery.get("devices", []), existing)
+    return {
+        "pumps": pumps,
+        "stats": stats,
+        "discovery": discovery,
     }

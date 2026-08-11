@@ -31,3 +31,26 @@ def test_group_turn_on_commands_by_device() -> None:
     assert len(by_device["dev-b"]) == 1
     ordered = sort_commands_by_switch(by_device["dev-a"], pumps)
     assert [c.pump_name for c in ordered] == ["a1", "a2"]
+
+
+def test_group_turn_on_commands_meross_uuid() -> None:
+    from app.config import MerossConfig
+
+    pumps = {
+        "m1": PumpConfig(
+            name="m1",
+            meross=MerossConfig(device_uuid="meross-a", channel=0, switch_code="switch_1"),
+        ),
+        "m2": PumpConfig(
+            name="m2",
+            meross=MerossConfig(device_uuid="meross-a", channel=1, switch_code="switch_2"),
+        ),
+    }
+    commands = [
+        PumpCommand("m2", "turn_on", "test"),
+        PumpCommand("m1", "turn_on", "test"),
+    ]
+    singles, by_device = group_turn_on_commands(commands, pumps)
+    assert singles == []
+    ordered = sort_commands_by_switch(by_device["meross-a"], pumps)
+    assert [c.pump_name for c in ordered] == ["m1", "m2"]

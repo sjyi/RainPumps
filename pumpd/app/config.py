@@ -57,10 +57,17 @@ class SmartThingsPumpConfig(BaseModel):
     device_id: str = ""
 
 
+class MerossConfig(BaseModel):
+    device_uuid: str = ""
+    channel: int = 0  # 0-based outlet on multi-gang plugs
+    switch_code: str = ""  # e.g. switch_1 — display / stagger ordering
+
+
 class PumpConfig(BaseModel):
     name: str
     enabled: bool = True
     tuya: TuyaConfig = Field(default_factory=TuyaConfig)
+    meross: MerossConfig = Field(default_factory=MerossConfig)
     smartthings: SmartThingsPumpConfig = Field(default_factory=SmartThingsPumpConfig)
 
 
@@ -118,9 +125,9 @@ ControlMode = Literal["local", "cloud", "auto"]
 class DevicesConfig(BaseModel):
     """Device control path selection.
 
-    local — Tuya LAN first, SmartThings fallback (default when remote LAN unavailable).
-    cloud — Tuya IoT Cloud + SmartThings; skips LAN even if configured.
-    auto  — LAN, then cloud, then SmartThings.
+    local — Tuya LAN first, Meross cloud, SmartThings fallback.
+    cloud — Tuya IoT Cloud, Meross cloud, SmartThings; skips Tuya LAN.
+    auto  — Tuya LAN, Tuya cloud, Meross cloud, SmartThings.
     """
 
     control_mode: ControlMode = "auto"
@@ -153,6 +160,10 @@ class EnvSettings(BaseSettings):
     tuya_api_secret: str = ""
     tuya_api_region: str = "us"
     tuya_api_device_id: str = ""
+    meross_email: str = ""
+    meross_password: str = ""
+    meross_api_base: str = "https://iotx-us.meross.com"
+    meross_mfa_code: str = ""
 
 
 def load_config(path: Path | str = "config.yaml") -> AppConfig:

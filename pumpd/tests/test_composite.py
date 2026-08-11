@@ -61,3 +61,12 @@ async def test_composite_cloud_only() -> None:
     result = await dev.turn_on()
     assert result.success
     assert cloud.state == DeviceState.ON
+
+
+@pytest.mark.asyncio
+async def test_composite_meross_cloud() -> None:
+    meross = FakeDevice("meross_cloud")
+    dev = CompositePumpDevice("p1", None, None, meross_cloud=meross, control_mode="cloud")
+    result = await dev.turn_on()
+    assert result.success
+    assert meross.state == DeviceState.ON

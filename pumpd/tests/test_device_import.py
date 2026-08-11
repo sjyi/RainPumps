@@ -11,8 +11,10 @@ import yaml
 from app.config import PumpConfig, save_pumps
 from app.device_import import (
     DiscoveredDevice,
+    annotate_discovered_system_status,
     discover_all,
     expand_tuya_switch_devices,
+    import_status_counts,
     load_tuya_cloud_credentials,
     load_tuya_devices_json,
     merge_discovered,
@@ -208,3 +210,110 @@ def test_load_tuya_devices_json_expands_via_discover_all(tmp_path: Path) -> None
     assert len(result["devices"]) == 3
     codes = {d["tuya_switch_code"] for d in result["devices"]}
     assert codes == {"switch_1", "switch_2", "switch_3"}
+
+
+def test_expand_meross_channel_devices() -> None:
+    from app.device_import import expand_meross_channel_devices
+
+    base = DiscoveredDevice(
+        source="meross_cloud",
+        label="Roof Plug",
+        meross_device_uuid="uuid-abc",
+        raw={
+            "channels": [
+                {"channel": 0, "devName": "Switch 1"},
+                {"channel": 1, "devName": "Switch 2"},
+            ]
+        },
+    )
+    expanded = expand_meross_channel_devices([base])
+    assert len(expanded) == 2
+    assert expanded[0].meross_channel == 0
+    assert expanded[1].meross_switch_code == "switch_2"
+
+
+def test_build_auto_import_pumps_adds_and_updates() -> None:
+    from app.config import MerossConfig, TuyaConfig
+    from app.device_import import build_auto_import_pumps
+
+    existing = [
+        PumpConfig(
+            name="roof_sump",
+            meross=MerossConfig(device_uuid="uuid-1", channel=0, switch_code="switch_1"),
+        )
+    ]
+    discovered = [
+        {
+            "label": "2nd Fl Roof Sump",
+            "meross_device_uuid": "uuid-1",
+            "meross_channel": 0,
+            "meross_switch_code": "switch_1",
+        },
+        {
+            "label": "1st roof Plug Switch 1",
+            "meross_device_uuid": "uuid-2",
+            "meross_channel": 0,
+            "meross_switch_code": "switch_1",
+        },
+    ]
+    pumps, stats = build_auto_import_pumps(discovered, existing)
+    assert stats == {"added": 1, "updated": 1, "skipped": 0, "discovered": 2}
+    assert {p.name for p in pumps} == {"roof_sump", "1st_roof_plug_switch_1"}
+    updated = next(p for p in pumps if p.name == "roof_sump")
+    assert updated.meross.device_uuid == "uuid-1"
+
+
+def test_import_setup_includes_meross() -> None:
+    from app.device_import import get_import_setup_status
+
+    status = get_import_setup_status(
+        meross_email="user@example.com",
+        meross_password="secret",
+    )
+    assert status["meross_cloud"]["configured"] is True
+    assert status["ready"] is True
+
+
+def test_annotate_discovered_system_status() -> None:
+    from app.config import MerossConfig, TuyaConfig
+
+    existing = [
+        PumpConfig(
+            name="roof_sump",
+            meross=MerossConfig(device_uuid="uuid-1", channel=0, switch_code="switch_1"),
+        ),
+        PumpConfig(
+            name="east_plug",
+            tuya=TuyaConfig(device_id="tuya-east", switch_code="switch_2"),
+        ),
+    ]
+    devices = [
+        {
+            "label": "2nd Fl Roof Sump",
+            "meross_device_uuid": "uuid-1",
+            "meross_channel": 0,
+        },
+        {
+            "label": "New Meross Plug",
+            "meross_device_uuid": "uuid-new",
+            "meross_channel": 0,
+        },
+        {
+            "label": "East outlet 2",
+            "tuya_device_id": "tuya-east",
+            "tuya_switch_code": "switch_2",
+        },
+        {
+            "label": "Unmatched ST",
+            "smartthings_device_id": "st-only",
+        },
+    ]
+    annotated = annotate_discovered_system_status(devices, existing)
+    assert annotated[0]["in_system"] is True
+    assert annotated[0]["existing_pump_name"] == "roof_sump"
+    assert annotated[1]["in_system"] is False
+    assert annotated[1]["existing_pump_name"] == ""
+    assert annotated[2]["in_system"] is True
+    assert annotated[2]["existing_pump_name"] == "east_plug"
+    assert annotated[3]["in_system"] is False
+    assert import_status_counts(annotated) == {"total": 4, "new": 2, "existing": 2}

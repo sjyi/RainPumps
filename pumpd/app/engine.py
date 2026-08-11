@@ -290,9 +290,13 @@ def evaluate(
                 reason = "cooldown active"
                 new_phase = p.phase
             elif p.phase == "idle":
-                if preempt and not _in_cooldown(p, now):
+                if (preempt or is_raining_now) and not _in_cooldown(p, now):
                     want_on = True
-                    reason = preempt_reason
+                    reason = (
+                        preempt_reason
+                        if preempt
+                        else "rain detected now (forecast/MQTT)"
+                    )
                     new_phase = "pre_rain" if not is_raining_now else "running"
                 else:
                     want_on = False

@@ -340,6 +340,25 @@ def test_forecast_is_raining_current_hour() -> None:
     assert forecast_is_raining(window, NOW, 70) is True
 
 
+def test_idle_starts_when_raining_now_without_preempt() -> None:
+    """High pop now but below preempt rain-sum threshold should still start pumps."""
+    window = [_forecast(0, 97, 0.1), _forecast(1, 10, 0.1)]
+    rain = RainState(False, 0, 0.7, "forecast", NOW)
+    ok, _ = should_preemptive_start(window, NOW, 2, 70, 2.0)
+    assert ok is False
+    result = evaluate(
+        now=NOW,
+        rain=rain,
+        forecast_window=window,
+        pumps=[_pump()],
+        rules=_rules(),
+        safety=SafetyFlags(),
+        max_runtime_minutes=60,
+    )
+    assert any(c.action == "turn_on" for c in result.commands)
+    assert result.pumps[0].phase == "running"
+
+
 def test_cooldown_blocks_auto_start() -> None:
     rain = RainState(False, 0, 0.7, "forecast", NOW)
     window = [_forecast(0, 90, 3.0)]

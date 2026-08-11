@@ -13,8 +13,12 @@ from pydantic import BaseModel
 
 from app.config import AppConfig, EnvSettings
 from app.device_import import (
+    annotate_discovered_system_status,
+    auto_import_devices,
     discover_all,
+    discovered_dict_to_pump_config,
     get_import_setup_status,
+    import_status_counts,
     resolve_credential_paths,
     slugify_pump_name,
 )
@@ -56,6 +60,9 @@ class ImportPumpItem(BaseModel):
     tuya_local_key: str = ""
     tuya_version: float = 3.4
     tuya_switch_code: str = ""
+    meross_device_uuid: str = ""
+    meross_channel: int = 0
+    meross_switch_code: str = ""
     smartthings_device_id: str = ""
 
 
@@ -415,6 +422,8 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
             tuya_api_secret=env.tuya_api_secret,
             tuya_api_region=env.tuya_api_region,
             tuya_api_device_id=env.tuya_api_device_id,
+            meross_email=env.meross_email,
+            meross_password=env.meross_password,
             paths={
                 "tinytuya_json": paths.get("tinytuya_json"),
                 "devices_json": paths.get("devices_json"),
@@ -429,16 +438,23 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
         env = EnvSettings()
         base = Path(service.config_path).parent
         paths = resolve_credential_paths(base)
-        return await discover_all(
+        result = await discover_all(
             smartthings_pat=env.smartthings_pat or service.smartthings_pat,
             tuya_api_key=env.tuya_api_key,
             tuya_api_secret=env.tuya_api_secret,
             tuya_api_region=env.tuya_api_region,
             tuya_api_device_id=env.tuya_api_device_id,
+            meross_email=env.meross_email,
+            meross_password=env.meross_password,
+            meross_api_base=env.meross_api_base,
+            meross_mfa_code=env.meross_mfa_code,
             tuya_config_file=paths.get("tinytuya_json"),
             tuya_devices_file=paths.get("devices_json"),
             lan_scan=lan_scan,
         )
+        result["devices"] = annotate_discovered_system_status(result["devices"], config.pumps)
+        result["import_status"] = import_status_counts(result["devices"])
+        return result
 
     @router.post("/api/devices/upload-tuya-json", dependencies=[Depends(verify_auth)])
     async def api_upload_tuya_json(request: Request) -> dict[str, Any]:
@@ -459,24 +475,19 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
     async def api_import_devices(body: ImportPumpsRequest) -> dict[str, Any]:
         if body.mode not in ("merge", "replace"):
             raise HTTPException(status_code=422, detail="mode must be merge or replace")
-        from app.config import PumpConfig, SmartThingsPumpConfig, TuyaConfig
 
-        pumps: list[PumpConfig] = []
+        pumps = []
         for item in body.pumps:
-            if not item.name.strip():
-                item.name = slugify_pump_name(item.tuya_device_id or item.smartthings_device_id)
+            name = item.name.strip()
+            if not name:
+                name = slugify_pump_name(
+                    item.tuya_device_id or item.meross_device_uuid or item.smartthings_device_id
+                )
             pumps.append(
-                PumpConfig(
-                    name=item.name.strip(),
+                discovered_dict_to_pump_config(
+                    item.model_dump(),
+                    name,
                     enabled=item.enabled,
-                    tuya=TuyaConfig(
-                        device_id=item.tuya_device_id,
-                        ip=item.tuya_ip,
-                        local_key=item.tuya_local_key,
-                        version=item.tuya_version,
-                        switch_code=item.tuya_switch_code,
-                    ),
-                    smartthings=SmartThingsPumpConfig(device_id=item.smartthings_device_id),
                 )
             )
         try:
@@ -491,6 +502,77 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
             ) from exc
         return {"pumps": [{"name": p.name, "enabled": p.enabled} for p in saved]}
 
+    @router.post("/api/devices/auto-import", dependencies=[Depends(verify_auth)])
+    async def api_auto_import_devices(
+        lan_scan: bool = Query(default=True),
+        mode: str = Query(default="merge"),
+    ) -> dict[str, Any]:
+        if mode not in ("merge", "replace"):
+            raise HTTPException(status_code=422, detail="mode must be merge or replace")
+        env = EnvSettings()
+        base = Path(service.config_path).parent
+        paths = resolve_credential_paths(base)
+        result = await auto_import_devices(
+            existing=config.pumps,
+            smartthings_pat=env.smartthings_pat or service.smartthings_pat,
+            tuya_api_key=env.tuya_api_key,
+            tuya_api_secret=env.tuya_api_secret,
+            tuya_api_region=env.tuya_api_region,
+            tuya_api_device_id=env.tuya_api_device_id,
+            meross_email=env.meross_email,
+            meross_password=env.meross_password,
+            meross_api_base=env.meross_api_base,
+            meross_mfa_code=env.meross_mfa_code,
+            tuya_config_file=paths.get("tinytuya_json"),
+            tuya_devices_file=paths.get("devices_json"),
+            lan_scan=lan_scan,
+        )
+        pumps = result["pumps"]
+        stats = result["stats"]
+        discovery = result["discovery"]
+        raw_devices = discovery.get("devices", [])
+
+        def _annotated(existing: list) -> tuple[list, dict[str, int]]:
+            rows = annotate_discovered_system_status(raw_devices, existing)
+            return rows, import_status_counts(rows)
+
+        if not pumps:
+            devices, import_counts = _annotated(config.pumps)
+            return {
+                "pumps": [],
+                "stats": stats,
+                "sources": discovery.get("sources", {}),
+                "errors": discovery.get("errors", {}),
+                "devices": devices,
+                "setup": discovery.get("setup"),
+                "import_status": import_counts,
+                "message": "No devices found to import",
+            }
+        try:
+            saved = await service.import_pumps(pumps, mode=mode)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"Could not write config.yaml: {exc}. "
+                    "If running in Docker, ensure config.yaml is not mounted read-only."
+                ),
+            ) from exc
+        devices, import_counts = _annotated(saved)
+        return {
+            "pumps": [{"name": p.name, "enabled": p.enabled} for p in saved],
+            "stats": stats,
+            "sources": discovery.get("sources", {}),
+            "errors": discovery.get("errors", {}),
+            "devices": devices,
+            "setup": discovery.get("setup"),
+            "import_status": import_counts,
+            "message": (
+                f"Synced {len(pumps)} pump(s): {stats['added']} added, "
+                f"{stats['updated']} updated"
+            ),
+        }
+
     @router.get("/api/pumps", dependencies=[Depends(verify_auth)])
     async def api_list_pumps() -> dict[str, Any]:
         return {
@@ -501,6 +583,9 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
                     "tuya_device_id": p.tuya.device_id,
                     "tuya_ip": p.tuya.ip,
                     "tuya_switch_code": p.tuya.switch_code,
+                    "meross_device_uuid": p.meross.device_uuid,
+                    "meross_channel": p.meross.channel,
+                    "meross_switch_code": p.meross.switch_code,
                     "smartthings_device_id": p.smartthings.device_id,
                 }
                 for p in config.pumps

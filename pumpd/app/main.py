@@ -58,6 +58,10 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
         tuya_api_secret=env.tuya_api_secret,
         tuya_api_region=env.tuya_api_region,
         tuya_api_device_id=env.tuya_api_device_id,
+        meross_email=env.meross_email,
+        meross_password=env.meross_password,
+        meross_api_base=env.meross_api_base,
+        meross_mfa_code=env.meross_mfa_code,
         config_path=config_path,
     )
     scheduler = create_scheduler(config, service)

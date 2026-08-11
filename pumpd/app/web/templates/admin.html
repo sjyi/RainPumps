@@ -59,6 +59,8 @@
   .sim-status.is-active { background: #eff6ff; border-color: #bfdbfe; color: #1e40af; }
   .sim-status.is-complete { background: #ecfdf5; border-color: #a7f3d0; color: #065f46; }
   .sim-status.is-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+  #import-table tr.import-row-existing { opacity: 0.75; }
+  #import-table .meta { font-size: 0.85rem; color: #6b7280; }
 </style>
 {% endblock %}
 
@@ -95,11 +97,12 @@ document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_
   </div>
   <div id="import-pumps-body" class="collapsible-body is-collapsed">
   <p class="meta">
-    Discover switches from SmartThings and Tuya (cloud, LAN scan, or uploaded <code>devices.json</code> from
-    <code>python -m tinytuya wizard</code>). Select devices and import into <code>config.yaml</code>.
+    Discover switches from SmartThings, Tuya, and Meross. Use <strong>Sync all devices</strong> to
+    discover and import everything into <code>config.yaml</code> in one step, or pick devices manually below.
   </p>
   <div class="import-toolbar">
-    <button type="button" class="primary" id="discover-devices-btn">Discover devices</button>
+    <button type="button" class="primary" id="auto-import-devices-btn">Sync all devices</button>
+    <button type="button" id="discover-devices-btn">Discover only</button>
     <label class="btn" style="cursor:pointer;margin:0;">
       Upload wizard JSON
       <input type="file" id="tuya-json-upload" accept=".json,application/json" hidden>
@@ -116,8 +119,10 @@ document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_
         <th><input type="checkbox" id="import-select-all" checked></th>
         <th>Pump name</th>
         <th>Label</th>
+        <th>Status</th>
         <th>Switch</th>
         <th>Tuya ID / IP</th>
+        <th>Meross UUID</th>
         <th>SmartThings ID</th>
       </tr>
     </thead>
@@ -400,6 +405,8 @@ document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_
   const importTable = document.getElementById('import-table');
   const importBody = document.getElementById('import-table-body');
   const importBtn = document.getElementById('import-devices-btn');
+  const autoImportBtn = document.getElementById('auto-import-devices-btn');
+  const discoverBtn = document.getElementById('discover-devices-btn');
   const selectAll = document.getElementById('import-select-all');
   let discovered = [];
 
@@ -412,6 +419,7 @@ document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_
     const items = [
       ['SmartThings', setup.smartthings],
       ['Tuya cloud', setup.tuya_cloud],
+      ['Meross cloud', setup.meross_cloud],
       ['devices.json', setup.tuya_json],
     ];
     items.forEach(([label, info]) => {
@@ -424,9 +432,104 @@ document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_
       importStatus.textContent =
         'Configure at least one source above, then click Discover. Easiest: run tinytuya wizard and upload devices.json.';
     } else {
-      importStatus.textContent = 'Credentials detected — click Discover devices.';
+      importStatus.textContent = 'Credentials detected — click Sync all devices or Discover only.';
     }
   }
+
+  function deviceToPumpPayload(d, name) {
+    return {
+      name: name || slugify(d.label),
+      enabled: true,
+      tuya_device_id: d.tuya_device_id || '',
+      tuya_ip: d.tuya_ip || '',
+      tuya_local_key: d.tuya_local_key || '',
+      tuya_version: d.tuya_version || 3.4,
+      tuya_switch_code: d.tuya_switch_code || '',
+      meross_device_uuid: d.meross_device_uuid || '',
+      meross_channel: d.meross_channel ?? 0,
+      meross_switch_code: d.meross_switch_code || '',
+      smartthings_device_id: d.smartthings_device_id || '',
+    };
+  }
+
+  function formatSourceSummary(data) {
+    const errLines = Object.entries(data.errors || {}).map(([k, msg]) => `${k}: ${msg}`);
+    importErrors.textContent = errLines.join(' · ');
+    const srcLines = Object.entries(data.sources || {})
+      .filter(([, v]) => v.status === 'ok')
+      .map(([k, v]) => `${k}: ${v.message}`);
+    return srcLines.join(' · ');
+  }
+
+  function formatDeviceSummary(data) {
+    const counts = data.import_status;
+    if (!counts || !counts.total) return '';
+    const parts = [`${counts.total} device(s)`];
+    if (counts.new) parts.push(`${counts.new} new`);
+    if (counts.existing) parts.push(`${counts.existing} already imported`);
+    return parts.join(' · ');
+  }
+
+  function updateImportBtnState() {
+    const anyChecked = document.querySelector('.import-row:checked');
+    importBtn.disabled = !anyChecked;
+  }
+
+  async function runDiscover() {
+    importStatus.textContent = 'Discovering devices…';
+    importErrors.textContent = '';
+    const lan = document.getElementById('lan-scan-toggle').checked;
+    const resp = await fetch(`/api/devices/discover?lan_scan=${lan}`);
+    if (!resp.ok) {
+      importStatus.textContent = 'Discovery failed';
+      return null;
+    }
+    const data = await resp.json();
+    renderDevices(data.devices || []);
+    if (data.setup) renderSetup(data.setup);
+    return data;
+  }
+
+  discoverBtn.onclick = async function() {
+    const data = await runDiscover();
+    if (!data) return;
+    const summary = formatSourceSummary(data);
+    const deviceSummary = formatDeviceSummary(data);
+    const parts = [summary, deviceSummary].filter(Boolean);
+    importStatus.textContent = parts.length
+      ? parts.join(' · ')
+      : (data.devices.length ? `Found ${data.devices.length} device(s)` : 'No devices found — check setup above');
+  };
+
+  autoImportBtn.onclick = async function() {
+    importStatus.textContent = 'Discovering and syncing all devices…';
+    importErrors.textContent = '';
+    autoImportBtn.disabled = true;
+    discoverBtn.disabled = true;
+    importBtn.disabled = true;
+    const lan = document.getElementById('lan-scan-toggle').checked;
+    try {
+      const resp = await fetch(`/api/devices/auto-import?lan_scan=${lan}&mode=merge`, {
+        method: 'POST',
+      });
+      if (!resp.ok) {
+        importStatus.textContent = 'Sync failed: ' + (await resp.text());
+        return;
+      }
+      const data = await resp.json();
+      renderDevices(data.devices || []);
+      if (data.setup) renderSetup(data.setup);
+      formatSourceSummary(data);
+      const deviceSummary = formatDeviceSummary(data);
+      const baseMsg = data.message || `Synced ${(data.pumps || []).length} pump(s)`;
+      importStatus.textContent = deviceSummary ? `${baseMsg} · ${deviceSummary}` : baseMsg;
+      if (window.refreshStatusPanel) window.refreshStatusPanel();
+    } finally {
+      autoImportBtn.disabled = false;
+      discoverBtn.disabled = false;
+      updateImportBtnState();
+    }
+  };
 
   async function loadSetup() {
     const resp = await fetch('/api/devices/setup');
@@ -438,49 +541,46 @@ document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_
   function renderDevices(devices) {
     discovered = devices;
     importBody.innerHTML = '';
+    let newCount = 0;
     devices.forEach((d, idx) => {
+      const inSystem = Boolean(d.in_system);
+      if (!inSystem) newCount += 1;
       const tr = document.createElement('tr');
+      if (inSystem) tr.classList.add('import-row-existing');
       const tuyaInfo = d.tuya_device_id
         ? `${d.tuya_device_id.slice(0, 12)}… / ${d.tuya_ip || 'no IP'}`
+        : '—';
+      const merossInfo = d.meross_device_uuid
+        ? `${d.meross_device_uuid.slice(0, 12)}… ch ${d.meross_channel ?? 0}`
         : '—';
       const stInfo = d.smartthings_device_id
         ? `${d.smartthings_device_id.slice(0, 12)}…`
         : '—';
-      const switchInfo = d.tuya_switch_code || 'switch_1';
+      const switchInfo = d.switch_code || d.tuya_switch_code || d.meross_switch_code || 'switch_1';
+      const defaultName = inSystem && d.existing_pump_name
+        ? d.existing_pump_name
+        : slugify(d.label);
+      const statusHtml = inSystem
+        ? `<span class="badge idle" title="Already in config.yaml">Imported</span><span class="meta"> ${d.existing_pump_name || ''}</span>`
+        : '<span class="badge running">New</span>';
       tr.innerHTML = `
-        <td><input type="checkbox" class="import-row" data-idx="${idx}" checked></td>
-        <td><input type="text" class="pump-name" value="${slugify(d.label)}" data-idx="${idx}"></td>
+        <td><input type="checkbox" class="import-row" data-idx="${idx}" ${inSystem ? '' : 'checked'}></td>
+        <td><input type="text" class="pump-name" value="${defaultName}" data-idx="${idx}" ${inSystem ? 'readonly title="Already imported as this pump name"' : ''}></td>
         <td>${d.label}</td>
+        <td>${statusHtml}</td>
         <td class="mono">${switchInfo}</td>
         <td class="mono">${tuyaInfo}${d.tuya_local_key ? ' · key ✓' : ''}</td>
+        <td class="mono">${merossInfo}</td>
         <td class="mono">${stInfo}</td>`;
       importBody.appendChild(tr);
     });
     importTable.style.display = devices.length ? 'table' : 'none';
-    importBtn.disabled = !devices.length;
+    selectAll.checked = newCount > 0;
+    document.querySelectorAll('.import-row').forEach(cb => {
+      cb.onchange = updateImportBtnState;
+    });
+    updateImportBtnState();
   }
-
-  document.getElementById('discover-devices-btn').onclick = async function() {
-    importStatus.textContent = 'Discovering devices…';
-    importErrors.textContent = '';
-    const lan = document.getElementById('lan-scan-toggle').checked;
-    const resp = await fetch(`/api/devices/discover?lan_scan=${lan}`);
-    if (!resp.ok) {
-      importStatus.textContent = 'Discovery failed';
-      return;
-    }
-    const data = await resp.json();
-    renderDevices(data.devices || []);
-    if (data.setup) renderSetup(data.setup);
-    const errLines = Object.entries(data.errors || {}).map(([k, msg]) => `${k}: ${msg}`);
-    importErrors.textContent = errLines.join(' · ');
-    const srcLines = Object.entries(data.sources || {})
-      .filter(([, v]) => v.status === 'ok')
-      .map(([k, v]) => `${k}: ${v.message}`);
-    importStatus.textContent = srcLines.length
-      ? srcLines.join(' · ')
-      : (data.devices.length ? `Found ${data.devices.length} device(s)` : 'No devices found — check setup above');
-  };
 
   document.getElementById('tuya-json-upload').onchange = async function(ev) {
     const file = ev.target.files[0];
@@ -502,6 +602,7 @@ document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_
 
   selectAll.onchange = function() {
     document.querySelectorAll('.import-row').forEach(cb => { cb.checked = selectAll.checked; });
+    updateImportBtnState();
   };
 
   importBtn.onclick = async function() {
@@ -511,16 +612,7 @@ document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_
       const idx = Number(cb.dataset.idx);
       const d = discovered[idx];
       const nameInput = document.querySelector(`.pump-name[data-idx="${idx}"]`);
-      pumps.push({
-        name: nameInput.value.trim() || slugify(d.label),
-        enabled: true,
-        tuya_device_id: d.tuya_device_id || '',
-        tuya_ip: d.tuya_ip || '',
-        tuya_local_key: d.tuya_local_key || '',
-        tuya_version: d.tuya_version || 3.4,
-        tuya_switch_code: d.tuya_switch_code || '',
-        smartthings_device_id: d.smartthings_device_id || '',
-      });
+      pumps.push(deviceToPumpPayload(d, nameInput.value.trim()));
     });
     if (!pumps.length) {
       importStatus.textContent = 'Select at least one device';
@@ -538,6 +630,11 @@ document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_
     }
     const data = await resp.json();
     importStatus.textContent = `Imported ${data.pumps.length} pump(s)`;
+    const refresh = await runDiscover();
+    if (refresh) {
+      const deviceSummary = formatDeviceSummary(refresh);
+      if (deviceSummary) importStatus.textContent += ` · ${deviceSummary}`;
+    }
     if (window.refreshStatusPanel) window.refreshStatusPanel();
   };
 })();
