@@ -1,0 +1,43 @@
+{# Bulk manual control for multi-outlet devices — include with: g #}
+<div class="manual-control-scope manual-control-group"
+     data-device-backend="{{ g.device_backend }}"
+     data-device-id="{{ g.device_id }}">
+  <fieldset class="manual-control manual-control-panel" hidden>
+    <legend class="manual-control-legend">Manual time limit (all outlets)</legend>
+    <div class="manual-duration-row">
+      <label>
+        Hours
+        <input type="number" class="manual-hours" min="0" max="99" value="0">
+      </label>
+      <label>
+        Minutes
+        <input type="number" class="manual-minutes" min="0" max="59"
+               value="{{ g.pumps[0].manual_default_minutes if g.pumps else 5 }}">
+      </label>
+    </div>
+    <div class="manual-limit-row">
+      <label class="manual-limit-option">
+        <input type="radio" class="manual-limit-duration" name="manual-limit-{{ g.device_backend }}-{{ g.device_id[:12] }}" checked>
+        For duration above
+      </label>
+      <label class="manual-limit-option">
+        <input type="radio" class="manual-limit-auto" name="manual-limit-{{ g.device_backend }}-{{ g.device_id[:12] }}">
+        Until next automatic control
+      </label>
+    </div>
+    <p class="meta manual-control-hint">
+      Adjust the time limit if needed, then click Update. Manual ON/OFF all runs immediately using these settings.
+    </p>
+    <div class="manual-control-actions">
+      <button type="button"
+              class="mode-btn manual-apply-btn"
+              data-mode-action="Update manual duration (all outlets)"
+              hx-post="/api/devices/mode"
+              hx-swap="none"
+              hx-on::after-request="if(event.detail.successful) { window.closeManualControlPanel(this); htmx.trigger('#status-panel', 'load'); }">
+        Update duration
+      </button>
+      <button type="button" class="manual-cancel-btn">Close</button>
+    </div>
+  </fieldset>
+</div>

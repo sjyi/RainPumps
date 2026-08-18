@@ -5,7 +5,29 @@ from __future__ import annotations
 import pytest
 
 from app.devices.base import DeviceState
-from app.devices.tuya_cloud import TuyaCloudDevice, parse_cloud_switch_state
+from app.devices.tuya_cloud import TuyaCloudDevice, _cloud_error, parse_cloud_switch_state
+
+
+def test_cloud_error_parses_quota_response() -> None:
+    result = {
+        "success": False,
+        "code": 28841004,
+        "msg": "IoT Core trial quota is exhausted.",
+    }
+    text = _cloud_error(result)
+    assert "IoT Core trial quota is exhausted." in text
+    assert "28841004" in text
+    assert "LAN" in text
+
+
+def test_cloud_error_parses_tinytuya_payload() -> None:
+    result = {
+        "Error": "Error Response from Tuya Cloud",
+        "Err": "913",
+        "Payload": '{"code":28841004,"msg":"IoT Core trial quota is exhausted.","success":false}',
+    }
+    text = _cloud_error(result)
+    assert "IoT Core trial quota is exhausted." in text
 
 
 def test_parse_cloud_switch_state_on() -> None:
@@ -65,6 +87,43 @@ async def test_tuya_cloud_get_state() -> None:
     cloud.on = True
     dev = TuyaCloudDevice("p1", "dev123", cloud)
     assert await dev.get_state() == DeviceState.ON
+
+
+def test_parse_cloud_switch_state_nested_result() -> None:
+    result = {
+        "success": True,
+        "result": {
+            "status": [
+                {"code": "switch_1", "value": True},
+                {"code": "switch_2", "value": False},
+            ]
+        },
+    }
+    assert parse_cloud_switch_state(result, switch_code="switch_2") == DeviceState.OFF
+
+
+@pytest.mark.asyncio
+async def test_tuya_cloud_probe_online_cloud_error() -> None:
+    class ErrorCloud(FakeCloud):
+        def getconnectstatus(self, device_id: str) -> dict:
+            return {"Error": "permission denied", "success": False}
+
+    dev = TuyaCloudDevice("p1", "dev123", ErrorCloud())
+    status, detail = await dev.probe_online()
+    assert status == "cloud_error"
+    assert "permission denied" in detail
+
+
+@pytest.mark.asyncio
+async def test_tuya_cloud_probe_online_reachable() -> None:
+    class ReachableCloud(FakeCloud):
+        def getstatus(self, device_id: str) -> dict:
+            return {"success": False, "msg": "status unavailable"}
+
+    dev = TuyaCloudDevice("p1", "dev123", ReachableCloud())
+    status, detail = await dev.probe_online()
+    assert status == "online"
+    assert "reachable" in detail
 
 
 @pytest.mark.asyncio

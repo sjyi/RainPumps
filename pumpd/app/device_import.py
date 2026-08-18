@@ -569,32 +569,31 @@ def merge_discovered(
 
 def expand_meross_channel_devices(devices: list[DiscoveredDevice]) -> list[DiscoveredDevice]:
     """One import row per Meross outlet (multi-gang plugs)."""
-    from app.devices.meross_cloud import channel_to_switch_code
+    from app.devices.meross_cloud import channel_to_switch_code, iter_meross_outlets
 
     expanded: list[DiscoveredDevice] = []
     for dev in devices:
         if not dev.meross_device_uuid:
             expanded.append(dev)
             continue
-        channels = dev.raw.get("channels") if dev.raw else None
+        raw = dev.raw or {}
+        channels = raw.get("channels")
+        device_type = str(raw.get("device_type") or "")
         if not isinstance(channels, list) or len(channels) <= 1:
             if not dev.meross_switch_code:
                 dev.meross_switch_code = channel_to_switch_code(dev.meross_channel)
             expanded.append(dev)
             continue
-        for index, ch in enumerate(channels):
-            if not isinstance(ch, dict):
-                continue
-            channel = int(ch.get("channel", index))
-            ch_name = str(ch.get("devName") or ch.get("type") or f"channel {channel + 1}")
-            label = dev.label if len(channels) == 1 else f"{dev.label} {ch_name}".strip()
+        outlets = iter_meross_outlets(channels, device_type=device_type)
+        for index, (channel, suffix) in enumerate(outlets):
+            label = dev.label if not suffix else f"{dev.label} {suffix}".strip()
             expanded.append(
                 DiscoveredDevice(
                     source="meross_cloud",
                     label=label,
                     meross_device_uuid=dev.meross_device_uuid,
                     meross_channel=channel,
-                    meross_switch_code=channel_to_switch_code(channel),
+                    meross_switch_code=f"switch_{index + 1}",
                     match_key=f"{dev.meross_device_uuid}_{channel}",
                     raw=dev.raw,
                 )
@@ -883,6 +882,7 @@ def discovered_dict_to_pump_config(data: dict[str, Any], name: str, *, enabled: 
 
     return PumpConfig(
         name=name,
+        label=str(data.get("label") or "").strip(),
         enabled=enabled,
         tuya=TuyaConfig(
             device_id=str(data.get("tuya_device_id") or ""),
@@ -924,6 +924,8 @@ def build_auto_import_pumps(
         if key in existing_by_key:
             current = existing_by_key[key]
             pump = discovered_dict_to_pump_config(data, current.name, enabled=current.enabled)
+            if current.max_runtime_minutes is not None:
+                pump.max_runtime_minutes = current.max_runtime_minutes
             to_import.append(pump)
             updated += 1
         else:

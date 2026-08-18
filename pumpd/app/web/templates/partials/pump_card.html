@@ -1,18 +1,68 @@
 {# Shared pump card — include with: p, admin (bool) #}
-<div class="card pump-card" id="pump-card-{{ p.name }}">
-  <h2>{% if admin %}{{ p.name }}{% else %}{{ p.name | replace('_', ' ') | title }}{% endif %}</h2>
+{% if admin %}
+<div class="{% if nested %}pump-card-nested{% else %}card{% endif %} pump-card pump-card-admin{% if nested %}-nested{% else %} name-edit-scope{% endif %}"
+     id="pump-card-{{ p.name }}" data-pump-name="{{ p.name }}"
+     {% if not nested %}data-name-edit-key="pump:{{ p.name }}"{% endif %}>
+  <div class="pump-card-admin-header">
+    {% if nested %}
+    <div class="name-view-row name-edit-field-inline">
+      <span class="name-edit-label">{{ p.switch_code | replace('_', ' ') | title }}</span>
+      <span class="name-display-value switch-name-display"
+            data-pump-name="{{ p.name }}"
+            data-fallback="{{ p.display_label or (p.switch_code | replace('_', ' ') | title) }}">{{ p.display_label or (p.switch_code | replace('_', ' ') | title) }}</span>
+      <label class="name-edit-field name-edit-control name-edit-field-inline">
+        <input type="text" class="switch-label-input" data-pump-name="{{ p.name }}"
+               placeholder="Switch name" value="{{ p.display_label or '' }}" disabled>
+      </label>
+    </div>
+    {% else %}
+    <div class="name-title-row">
+      <div class="name-title-main">
+        <span class="name-display-value pump-title-display"
+              data-fallback="{{ p.display_label or (p.name | replace('_', ' ') | title) }}">{{ p.display_label or (p.name | replace('_', ' ') | title) }}</span>
+        <button type="button" class="name-edit-toggle" title="Edit names" aria-label="Edit names">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 20h9"/>
+            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    {% if p.device_id and p.device_backend %}
+    <p class="meta name-display-value device-name-display device-name-subtitle"
+       data-fallback="{{ p.device_label or p.display_label or (p.name | replace('_', ' ') | title) }}">
+      Device: {{ p.device_label or p.display_label or (p.name | replace('_', ' ') | title) }}
+    </p>
+    <label class="name-edit-field name-edit-control">
+      <span class="name-edit-label">Device name</span>
+      <input type="text" class="device-label-input"
+             data-device-key="{{ p.device_backend }}:{{ p.device_id }}"
+             placeholder="Device display name" value="{{ p.device_label or p.display_label or '' }}" disabled>
+    </label>
+    {% endif %}
+    <label class="name-edit-field name-edit-control">
+      <span class="name-edit-label">{% if p.device_id %}Switch name{% else %}Display name{% endif %}</span>
+      <input type="text" class="switch-label-input" data-pump-name="{{ p.name }}"
+             placeholder="Display name" value="{{ p.display_label or '' }}" disabled>
+    </label>
+    {% endif %}
+    <p class="meta pump-config-id">Config id: <code>{{ p.name }}</code></p>
+  </div>
   <p class="pump-status-line">
-    <span class="badge {{ p.online_status }}" title="Connection to device">{{ p.online_status | replace('_', ' ') | title }}</span>
-    ·
     {% if p.mode == 'manual_on' %}
-    <span class="badge manual">Manual ON</span>
+    <span class="badge on pump-power-badge">ON</span>
+    <span class="badge manual">Manual</span>
     {% elif p.mode == 'manual_off' %}
-    <span class="badge manual">Manual OFF</span>
+    <span class="badge off pump-power-badge">OFF</span>
+    <span class="badge manual">Manual</span>
     {% elif p.device_on and p.phase == 'post_rain_drain' %}
+    <span class="badge on pump-power-badge">ON</span>
     <span class="badge drain">Draining</span>
     {% elif p.device_on %}
+    <span class="badge on pump-power-badge">ON</span>
     <span class="badge running">Running</span>
     {% else %}
+    <span class="badge off pump-power-badge">OFF</span>
     <span class="badge idle">Standby</span>
     {% endif %}
   </p>
@@ -21,15 +71,14 @@
     {% if p.switch_code and p.switch_code not in ('switch_1', 'switch') %}
     · outlet: <strong>{{ p.switch_code }}</strong>
     {% endif %}
-    {% if admin %}
     · continuous: {{ p.runtime_continuous_min }} min
     · mode: {{ p.mode }} · phase: {{ p.phase }}
     · switch: {{ p.switch_code or 'switch_1' }}
     {% if p.online_detail and p.online_status != 'unconfigured' %} · probe: {{ p.online_detail }}{% endif %}
     {% if p.safety_override_approved %} · <span class="badge warn">safety override</span>{% endif %}
     {% if p.hardware_status and p.hardware_status != 'ok' %} · HW: <span class="badge {{ p.hardware_status }}">{{ p.hardware_status }}</span>{% endif %}
-    {% endif %}
   </p>
+  {% include "partials/manual_control.html" %}
   <div class="pump-mode-buttons" role="group" aria-label="Pump mode for {{ p.name }}">
     <button type="button"
             class="mode-btn mode-auto{% if p.mode == 'auto' %} is-active{% endif %}"
@@ -37,14 +86,14 @@
             hx-post="/api/pumps/{{ p.name }}/mode"
             hx-vals='{"mode": "auto"}'
             hx-swap="none"
-            hx-on::after-request="if(event.detail.successful) htmx.trigger('#status-panel', 'load')">
+            hx-on::after-request="if(event.detail.successful) { window.closeManualControlPanels(); htmx.trigger('#status-panel', 'load'); }">
       Auto
     </button>
     <button type="button"
             class="mode-btn mode-on{% if p.mode == 'manual_on' %} is-active{% endif %}"
             data-mode-action="Manual ON"
+            data-manual-mode="manual_on"
             hx-post="/api/pumps/{{ p.name }}/mode"
-            hx-vals='{"mode": "manual_on"}'
             hx-swap="none"
             hx-on::after-request="if(event.detail.successful) htmx.trigger('#status-panel', 'load')">
       Manual ON
@@ -52,18 +101,15 @@
     <button type="button"
             class="mode-btn mode-off{% if p.mode == 'manual_off' %} is-active{% endif %}"
             data-mode-action="Manual OFF"
+            data-manual-mode="manual_off"
             hx-post="/api/pumps/{{ p.name }}/mode"
-            hx-vals='{"mode": "manual_off"}'
             hx-swap="none"
             hx-on::after-request="if(event.detail.successful) htmx.trigger('#status-panel', 'load')">
       Manual OFF
     </button>
-    {% if admin %}
     <button type="button" class="danger remove-pump-btn" data-name="{{ p.name }}" title="Remove from pumpd config only (not from Tuya Cloud)">Remove</button>
-    {% endif %}
   </div>
   <p class="pump-command-status" hidden aria-live="polite"></p>
-  {% if admin %}
   <div class="override-box">
     <label>
       <input type="checkbox" id="override-{{ p.name }}">
@@ -72,12 +118,131 @@
     <button type="button"
             class="mode-btn mode-on{% if p.mode == 'manual_on' and p.safety_override_approved %} is-active{% endif %}"
             data-mode-action="Manual ON (override)"
+            data-manual-mode="manual_on"
+            data-manual-override="true"
             hx-post="/api/pumps/{{ p.name }}/mode"
-            hx-vals='js:{"mode":"manual_on","approve_safety_override":document.getElementById("override-{{ p.name }}").checked}'
             hx-swap="none"
             hx-on::after-request="if(event.detail.successful) htmx.trigger('#status-panel', 'load')">
       Manual ON (with override flag)
     </button>
   </div>
+  {% if not nested %}
+  <div class="name-save-row name-edit-control">
+    <label class="name-propagate-label">
+      <input type="checkbox" class="propagate-cloud-toggle" checked>
+      Push names to cloud
+    </label>
+    <button type="button" class="primary save-device-names-btn">Save names</button>
+    <p class="name-save-status meta" aria-live="polite"></p>
+    <ul class="names-cloud-result" hidden></ul>
+  </div>
   {% endif %}
 </div>
+{% else %}
+{% set power_on = p.device_on %}
+<div class="{% if nested %}pump-card-nested{% else %}card{% endif %} pump-card pump-card-collapsible" id="pump-card-{{ p.name }}" data-pump-name="{{ p.name }}">
+  <div class="pump-card-header">
+    <button type="button" class="pump-card-toggle" aria-expanded="false" aria-controls="pump-detail-{{ p.name }}">
+      <span class="pump-card-title">
+        {% if nested and p.switch_code %}
+        {{ p.display_label or (p.switch_code | replace('_', ' ') | title) }}
+        {% else %}
+        {{ p.display_label or (p.name | replace('_', ' ') | title) }}
+        {% endif %}
+      </span>
+      <span class="pump-card-arrow" aria-hidden="true">▶</span>
+    </button>
+    <div class="pump-card-summary">
+      {% if power_on %}
+      <span class="badge on pump-power-badge">ON</span>
+      {% else %}
+      <span class="badge off pump-power-badge">OFF</span>
+      {% endif %}
+      {% if not nested %}
+      <span class="badge {{ p.online_status }}">{{ p.online_status | replace('_', ' ') | title }}</span>
+      {% endif %}
+      {% if p.mode == 'manual_on' or p.mode == 'manual_off' %}
+      <span class="badge manual">Manual</span>
+      {% elif p.mode == 'auto' and power_on and p.phase == 'post_rain_drain' %}
+      <span class="badge drain">Draining</span>
+      {% elif p.mode == 'auto' and power_on %}
+      <span class="badge running">Running</span>
+      {% elif p.mode == 'auto' %}
+      <span class="badge idle">Auto</span>
+      {% endif %}
+    </div>
+  </div>
+  {% include "partials/manual_control.html" %}
+  <div class="pump-card-quick-actions" role="group" aria-label="Quick controls for {{ p.name }}">
+    <button type="button"
+            class="mode-btn mode-on mode-btn-compact{% if p.mode == 'manual_on' %} is-active{% endif %}"
+            data-mode-action="Manual ON"
+            data-manual-mode="manual_on"
+            hx-post="/api/pumps/{{ p.name }}/mode"
+            hx-swap="none"
+            hx-on::after-request="if(event.detail.successful) htmx.trigger('#status-panel', 'load')">
+      Manual ON
+    </button>
+    <button type="button"
+            class="mode-btn mode-off mode-btn-compact{% if p.mode == 'manual_off' %} is-active{% endif %}"
+            data-mode-action="Manual OFF"
+            data-manual-mode="manual_off"
+            hx-post="/api/pumps/{{ p.name }}/mode"
+            hx-swap="none"
+            hx-on::after-request="if(event.detail.successful) htmx.trigger('#status-panel', 'load')">
+      Manual OFF
+    </button>
+  </div>
+  <p class="pump-command-status" hidden aria-live="polite"></p>
+  <div class="pump-card-details" id="pump-detail-{{ p.name }}">
+    <p class="pump-status-line">
+      {% if power_on and p.phase == 'post_rain_drain' %}
+      <span class="badge drain">Draining</span>
+      {% elif power_on %}
+      <span class="badge running">Running</span>
+      {% else %}
+      <span class="badge idle">Standby</span>
+      {% endif %}
+    </p>
+    <p class="meta">
+      {% if nested %}
+      {{ p.name | replace('_', ' ') | title }}
+      ·
+      {% endif %}
+      Runtime today: {{ p.runtime_today_min }} min
+      {% if p.switch_code and p.switch_code not in ('switch_1', 'switch') %}
+      · outlet: <strong>{{ p.switch_code }}</strong>
+      {% endif %}
+    </p>
+    <div class="pump-mode-buttons" role="group" aria-label="Pump mode for {{ p.name }}">
+      <button type="button"
+              class="mode-btn mode-auto{% if p.mode == 'auto' %} is-active{% endif %}"
+              data-mode-action="Auto"
+              hx-post="/api/pumps/{{ p.name }}/mode"
+              hx-vals='{"mode": "auto"}'
+              hx-swap="none"
+              hx-on::after-request="if(event.detail.successful) { window.closeManualControlPanels(); htmx.trigger('#status-panel', 'load'); }">
+        Auto
+      </button>
+      <button type="button"
+              class="mode-btn mode-on{% if p.mode == 'manual_on' %} is-active{% endif %}"
+              data-mode-action="Manual ON"
+              data-manual-mode="manual_on"
+              hx-post="/api/pumps/{{ p.name }}/mode"
+              hx-swap="none"
+              hx-on::after-request="if(event.detail.successful) htmx.trigger('#status-panel', 'load')">
+        Manual ON
+      </button>
+      <button type="button"
+              class="mode-btn mode-off{% if p.mode == 'manual_off' %} is-active{% endif %}"
+              data-mode-action="Manual OFF"
+              data-manual-mode="manual_off"
+              hx-post="/api/pumps/{{ p.name }}/mode"
+              hx-swap="none"
+              hx-on::after-request="if(event.detail.successful) htmx.trigger('#status-panel', 'load')">
+        Manual OFF
+      </button>
+    </div>
+  </div>
+</div>
+{% endif %}

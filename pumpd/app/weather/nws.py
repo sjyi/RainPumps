@@ -20,9 +20,12 @@ class NwsProvider(WeatherProvider):
         if not is_us_location(latitude, longitude):
             return []
 
+        # NWS requires coordinates rounded to 4 decimal places (otherwise 301 redirect).
+        lat = round(latitude, 4)
+        lon = round(longitude, 4)
         headers = {"User-Agent": USER_AGENT, "Accept": "application/geo+json"}
-        async with httpx.AsyncClient(timeout=30.0, headers=headers) as client:
-            points = await client.get(f"{NWS_BASE}/points/{latitude},{longitude}")
+        async with httpx.AsyncClient(timeout=30.0, headers=headers, follow_redirects=True) as client:
+            points = await client.get(f"{NWS_BASE}/points/{lat},{lon}")
             points.raise_for_status()
             forecast_url = points.json()["properties"]["forecastHourly"]
             resp = await client.get(forecast_url)

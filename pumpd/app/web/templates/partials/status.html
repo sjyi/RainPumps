@@ -28,7 +28,7 @@
   <h2>Next 12 h forecast</h2>
   <div style="display:flex;gap:2px;height:48px;align-items:flex-end;">
     {% for f in status.forecast_12h %}
-    <span title="{{ f.hour_ts.strftime('%H:%M') }}: {{ f.pop_pct }}% / {{ f.rain_mm }}mm"
+    <span title="{{ f.hour_ts | format_local(config.timezone, '%H:%M') }}: {{ f.pop_pct }}% / {{ f.rain_mm }}mm"
           style="flex:1;background:#93c5fd;border-radius:2px 2px 0 0;height:{{ [4, f.pop_pct * 0.48]|max }}px"></span>
     {% endfor %}
   </div>
@@ -44,7 +44,7 @@
         <td>{{ h.component_id }}</td>
         <td>{{ h.component_type }}</td>
         <td>{{ h.status }}</td>
-        <td>{{ h.last_ok_at or '—' }}</td>
+        <td>{{ h.last_ok_at_local or '—' }}</td>
         <td>{{ h.last_error or '—' }}</td>
       </tr>
       {% else %}
@@ -61,7 +61,7 @@
       {% for h in status.provider_health %}
       <tr>
         <td>{{ h.provider }}</td>
-        <td>{{ h.last_ok_at.strftime('%Y-%m-%d %H:%M') if h.last_ok_at else '—' }}</td>
+        <td>{{ h.last_ok_at | format_local(config.timezone, '%Y-%m-%d %H:%M') }}</td>
         <td>{{ h.last_error or '—' }}</td>
       </tr>
       {% endfor %}

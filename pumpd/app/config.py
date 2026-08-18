@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -35,14 +35,40 @@ class RulesConfig(BaseModel):
     lookahead_hours: int = 2
     post_rain_drain_minutes: int = 30
     sensor_dry_minutes: int = 10
-    manual_revert_hours: int = 4
+    manual_revert_minutes: int = 5
     duty_cycle: DutyCycleConfig = Field(default_factory=DutyCycleConfig)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_manual_revert_hours(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "manual_revert_hours" in data and "manual_revert_minutes" not in data:
+            migrated = dict(data)
+            migrated["manual_revert_minutes"] = int(migrated.pop("manual_revert_hours")) * 60
+            return migrated
+        return data
 
 
 class SafetyConfig(BaseModel):
-    max_continuous_runtime_minutes: int = 60
+    max_continuous_runtime_minutes: int = 180
     min_cooldown_minutes: int = 15
     watchdog_stale_forecast_hours: int = 3
+
+
+class DeviceRuntimeOverride(BaseModel):
+    device_backend: str
+    device_id: str
+    max_runtime_minutes: int | None = None
+
+
+class DeviceLabelOverride(BaseModel):
+    device_backend: str
+    device_id: str
+    label: str = ""
+
+
+class DeviceDisplayOrderEntry(BaseModel):
+    device_backend: str
+    device_id: str
 
 
 class TuyaConfig(BaseModel):
@@ -65,7 +91,9 @@ class MerossConfig(BaseModel):
 
 class PumpConfig(BaseModel):
     name: str
+    label: str = ""  # optional display name for this switch/outlet
     enabled: bool = True
+    max_runtime_minutes: int | None = None
     tuya: TuyaConfig = Field(default_factory=TuyaConfig)
     meross: MerossConfig = Field(default_factory=MerossConfig)
     smartthings: SmartThingsPumpConfig = Field(default_factory=SmartThingsPumpConfig)
@@ -88,6 +116,8 @@ class SmtpConfig(BaseModel):
 
 
 class NotificationsConfig(BaseModel):
+    admin_email: str = ""
+    public_base_url: str = "http://localhost:8080"
     ntfy: NtfyConfig = Field(default_factory=NtfyConfig)
     smtp: SmtpConfig = Field(default_factory=SmtpConfig)
 
@@ -104,7 +134,7 @@ class ApiConfig(BaseModel):
     auth_enabled: bool = False
     api_key: str = ""
     lock_timeout_seconds: float = 30.0
-    device_command_timeout_seconds: float = 10.0
+    device_command_timeout_seconds: float = 20.0
 
 
 class HardwareMonitorConfig(BaseModel):
@@ -132,14 +162,27 @@ class DevicesConfig(BaseModel):
 
     control_mode: ControlMode = "auto"
     switch_stagger_seconds: float = 30.0
+    command_verify_delay_seconds: float = 15.0
+    command_verify_max_attempts: int = 3
+    online_probe_recovery_minutes: int = 5
+    # When false (default), Meross uses cloud MQTT only — no local LAN HTTP.
+    meross_lan_first: bool = False
+
+
+class DisplayConfig(BaseModel):
+    units: Literal["metric", "imperial"] = "imperial"
 
 
 class AppConfig(BaseModel):
     timezone: str = "America/New_York"
     location: LocationConfig = Field(default_factory=LocationConfig)
+    display: DisplayConfig = Field(default_factory=DisplayConfig)
     weather: WeatherConfig = Field(default_factory=WeatherConfig)
     rules: RulesConfig = Field(default_factory=RulesConfig)
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
+    device_runtime: list[DeviceRuntimeOverride] = Field(default_factory=list)
+    device_labels: list[DeviceLabelOverride] = Field(default_factory=list)
+    device_display_order: list[DeviceDisplayOrderEntry] = Field(default_factory=list)
     pumps: list[PumpConfig] = Field(default_factory=list)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     mqtt: MqttConfig = Field(default_factory=MqttConfig)
@@ -156,6 +199,8 @@ class EnvSettings(BaseSettings):
     smartthings_pat: str = ""
     api_key: str = ""
     smtp_password: str = ""
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
     tuya_api_key: str = ""
     tuya_api_secret: str = ""
     tuya_api_region: str = "us"
@@ -204,6 +249,189 @@ def save_location(path: Path | str, location: LocationConfig) -> None:
     loc["longitude"] = location.longitude
     loc["name"] = location.name
     loc["address"] = location.address
+    with config_path.open("w", encoding="utf-8") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+
+def save_display(path: Path | str, display: DisplayConfig) -> None:
+    """Persist display preferences to config.yaml."""
+    config_path = Path(path)
+    data: dict[str, Any] = {}
+    if config_path.exists():
+        with config_path.open(encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    data["display"] = display.model_dump()
+    with config_path.open("w", encoding="utf-8") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+
+def save_display_names(
+    path: Path | str,
+    *,
+    pump_labels: dict[str, str],
+    device_labels: list[DeviceLabelOverride],
+) -> None:
+    """Persist pump switch labels and per-device display names."""
+    config_path = Path(path)
+    data: dict[str, Any] = {}
+    if config_path.exists():
+        with config_path.open(encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+
+    pumps = data.get("pumps", [])
+    if not isinstance(pumps, list):
+        pumps = []
+    by_name = {
+        p["name"]: p for p in pumps if isinstance(p, dict) and "name" in p
+    }
+    for name, label in pump_labels.items():
+        if name not in by_name:
+            continue
+        cleaned = (label or "").strip()
+        if cleaned:
+            by_name[name]["label"] = cleaned
+        else:
+            by_name[name].pop("label", None)
+    data["pumps"] = list(by_name.values())
+
+    rows = [
+        row.model_dump(exclude_none=True)
+        for row in device_labels
+        if (row.label or "").strip()
+    ]
+    if rows:
+        data["device_labels"] = rows
+    elif "device_labels" in data:
+        del data["device_labels"]
+
+    with config_path.open("w", encoding="utf-8") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+
+def save_device_display_order(
+    path: Path | str,
+    order: list[DeviceDisplayOrderEntry],
+) -> None:
+    """Persist dashboard device group display order."""
+    config_path = Path(path)
+    data: dict[str, Any] = {}
+    if config_path.exists():
+        with config_path.open(encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+
+    rows = [row.model_dump(exclude_none=True) for row in order]
+    if rows:
+        data["device_display_order"] = rows
+    elif "device_display_order" in data:
+        del data["device_display_order"]
+
+    with config_path.open("w", encoding="utf-8") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+
+def save_runtime_settings(
+    path: Path | str,
+    *,
+    safety: SafetyConfig,
+    device_runtime: list[DeviceRuntimeOverride],
+    pump_runtime: dict[str, int | None],
+) -> None:
+    """Persist system, device, and per-switch max runtime settings."""
+    config_path = Path(path)
+    data: dict[str, Any] = {}
+    if config_path.exists():
+        with config_path.open(encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+
+    data["safety"] = safety.model_dump()
+    rows = [
+        row.model_dump(exclude_none=True)
+        for row in device_runtime
+        if row.max_runtime_minutes is not None
+    ]
+    if rows:
+        data["device_runtime"] = rows
+    elif "device_runtime" in data:
+        del data["device_runtime"]
+
+    pumps = data.get("pumps", [])
+    if not isinstance(pumps, list):
+        pumps = []
+    by_name = {
+        p["name"]: p for p in pumps if isinstance(p, dict) and "name" in p
+    }
+    for name, minutes in pump_runtime.items():
+        if name not in by_name:
+            continue
+        if minutes is None:
+            by_name[name].pop("max_runtime_minutes", None)
+        else:
+            by_name[name]["max_runtime_minutes"] = minutes
+    data["pumps"] = list(by_name.values())
+
+    with config_path.open("w", encoding="utf-8") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+
+def save_command_verify_settings(
+    path: Path | str,
+    *,
+    devices: DevicesConfig,
+) -> None:
+    """Persist command verification timing settings."""
+    config_path = Path(path)
+    data: dict[str, Any] = {}
+    if config_path.exists():
+        with config_path.open(encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+
+    dev = data.setdefault("devices", {})
+    if not isinstance(dev, dict):
+        dev = {}
+        data["devices"] = dev
+    dev["command_verify_delay_seconds"] = devices.command_verify_delay_seconds
+    dev["command_verify_max_attempts"] = devices.command_verify_max_attempts
+
+    with config_path.open("w", encoding="utf-8") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+
+def save_notifications_settings(
+    path: Path | str,
+    *,
+    notifications: NotificationsConfig,
+) -> None:
+    """Persist notification and SMTP settings under notifications: in config.yaml."""
+    config_path = Path(path)
+    data: dict[str, Any] = {}
+    if config_path.exists():
+        with config_path.open(encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+
+    notif = data.setdefault("notifications", {})
+    if not isinstance(notif, dict):
+        notif = {}
+        data["notifications"] = notif
+
+    if notifications.admin_email:
+        notif["admin_email"] = notifications.admin_email
+    elif "admin_email" in notif:
+        del notif["admin_email"]
+    if notifications.public_base_url:
+        notif["public_base_url"] = notifications.public_base_url
+
+    smtp = notif.setdefault("smtp", {})
+    if not isinstance(smtp, dict):
+        smtp = {}
+        notif["smtp"] = smtp
+    smtp_cfg = notifications.smtp
+    smtp["enabled"] = smtp_cfg.enabled
+    smtp["host"] = smtp_cfg.host
+    smtp["port"] = smtp_cfg.port
+    smtp["username"] = smtp_cfg.username
+    smtp["from_addr"] = smtp_cfg.from_addr
+    smtp["to_addrs"] = list(smtp_cfg.to_addrs)
+
     with config_path.open("w", encoding="utf-8") as f:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
@@ -260,6 +488,23 @@ def remove_pump(path: Path | str, name: str) -> list[PumpConfig]:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
     return [PumpConfig.model_validate(p) for p in filtered]
+
+
+def clear_local_devices(path: Path | str) -> None:
+    """Remove all pump/device entries from local config.yaml only."""
+    config_path = Path(path)
+    data: dict[str, Any] = {}
+    if config_path.exists():
+        with config_path.open(encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+
+    data["pumps"] = []
+    data.pop("device_labels", None)
+    data.pop("device_display_order", None)
+    data.pop("device_runtime", None)
+
+    with config_path.open("w", encoding="utf-8") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
 
 PumpMode = Literal["auto", "manual_on", "manual_off"]

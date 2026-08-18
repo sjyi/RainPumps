@@ -9,7 +9,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import AppConfig, EnvSettings
 from app.device_import import (
@@ -25,12 +25,19 @@ from app.device_import import (
 from app.engine import _as_utc
 from app.geocoding import reverse_geocode, search_locations
 from app.hardware_health import CommandLockError
+from app.pump_card_groups import group_pump_cards
 from app.service import DeviceCommandError, PumpService
+from app.time_format import format_local
 from app.weather.display import weather_code_icon, weather_code_label
+from app.web.units import format_precip_rate_mm_h, format_precipitation_mm, format_temperature
 
 templates = Jinja2Templates(directory="app/web/templates")
 templates.env.filters["weather_icon"] = weather_code_icon
 templates.env.filters["weather_label"] = weather_code_label
+templates.env.filters["format_temp"] = format_temperature
+templates.env.filters["format_precip"] = format_precipitation_mm
+templates.env.filters["format_precip_rate"] = format_precip_rate_mm_h
+templates.env.filters["format_local"] = format_local
 
 
 def _first_existing(*paths: Path) -> Path | None:
@@ -52,6 +59,41 @@ class LocationRequest(BaseModel):
     address: str = ""
 
 
+class DisplayRequest(BaseModel):
+    units: str
+
+
+class RuntimeSettingsRequest(BaseModel):
+    system_max_runtime_minutes: int
+    devices: dict[str, int | None] = {}
+    pumps: dict[str, int | None] = {}
+
+
+class DisplayNamesRequest(BaseModel):
+    devices: dict[str, str] = {}
+    switches: dict[str, str] = {}
+    propagate_cloud: bool = True
+
+
+class DeviceDisplayOrderRequest(BaseModel):
+    order: list[str] = Field(default_factory=list)
+
+
+class CommandVerifySettingsRequest(BaseModel):
+    command_verify_delay_seconds: float
+
+
+class NotificationSettingsRequest(BaseModel):
+    admin_email: str = ""
+    public_base_url: str = "http://localhost:8080"
+    smtp_enabled: bool = False
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_from_addr: str = ""
+    smtp_to_addrs: list[str] = Field(default_factory=list)
+
+
 class ImportPumpItem(BaseModel):
     name: str
     enabled: bool = True
@@ -69,6 +111,26 @@ class ImportPumpItem(BaseModel):
 class ImportPumpsRequest(BaseModel):
     pumps: list[ImportPumpItem]
     mode: str = "merge"
+
+
+class DeviceModeRequest(BaseModel):
+    device_backend: str
+    device_id: str
+    mode: str
+    approve_safety_override: bool = False
+    manual_hours: int = 0
+    manual_minutes: int = 0
+    manual_duration_minutes: int | None = None
+    manual_until_auto: bool = False
+
+
+class PumpModeRequest(BaseModel):
+    mode: str
+    approve_safety_override: bool = False
+    manual_hours: int = 0
+    manual_minutes: int = 0
+    manual_duration_minutes: int | None = None
+    manual_until_auto: bool = False
 
 
 def _health_summary(
@@ -132,7 +194,8 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
     async def user_dashboard(request: Request) -> HTMLResponse:
         status = service.get_status()
         rain = await service.get_rain_state()
-        pump_cards = await service.get_pump_cards()
+        pump_cards = await service.get_pump_cards(refresh_cloud=True)
+        pump_card_groups = group_pump_cards(pump_cards, config=config)
         return templates.TemplateResponse(
             request,
             "user.html",
@@ -141,6 +204,7 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
                 "status": status,
                 "rain": rain,
                 "pump_cards": pump_cards,
+                "pump_card_groups": pump_card_groups,
                 "active_nav": "user",
             },
         )
@@ -151,7 +215,14 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
         rain = await service.get_rain_state()
         health = _health_summary(config, service, scheduler)
         events = service.get_events(limit=50)
-        pump_cards = await service.get_pump_cards()
+        events_ui = service.format_events_for_ui(events)
+        forecast_history = service.get_forecast_history(limit=200, hours=48)
+        pump_cards = await service.get_pump_cards(refresh_cloud=True)
+        pump_card_groups = group_pump_cards(pump_cards, config=config)
+        runtime_settings = service.get_runtime_settings(pump_card_groups)
+        command_verify_settings = service.get_command_verify_settings()
+        notification_settings = service.get_notification_settings()
+        device_order_items = service.get_device_display_order_settings(pump_card_groups)
         return templates.TemplateResponse(
             request,
             "admin.html",
@@ -160,8 +231,14 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
                 "status": status,
                 "rain": rain,
                 "health": health,
-                "events": events,
+                "events": events_ui,
+                "forecast_history": forecast_history,
                 "pump_cards": pump_cards,
+                "pump_card_groups": pump_card_groups,
+                "runtime_settings": runtime_settings,
+                "command_verify_settings": command_verify_settings,
+                "notification_settings": notification_settings,
+                "device_order_items": device_order_items,
                 "control_mode": config.devices.control_mode,
                 "active_nav": "admin",
             },
@@ -171,11 +248,18 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
     async def partial_user_status(request: Request) -> HTMLResponse:
         status = service.get_status()
         rain = await service.get_rain_state()
-        pump_cards = await service.get_pump_cards()
+        pump_cards = await service.get_pump_cards(refresh_cloud=False)
+        pump_card_groups = group_pump_cards(pump_cards, config=config)
         return templates.TemplateResponse(
             request,
             "partials/user_status.html",
-            {"status": status, "rain": rain, "config": config, "pump_cards": pump_cards},
+            {
+                "status": status,
+                "rain": rain,
+                "config": config,
+                "pump_cards": pump_cards,
+                "pump_card_groups": pump_card_groups,
+            },
         )
 
     @router.get(
@@ -187,7 +271,8 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
         status = service.get_status()
         rain = await service.get_rain_state()
         health = _health_summary(config, service, scheduler)
-        pump_cards = await service.get_pump_cards()
+        pump_cards = await service.get_pump_cards(refresh_cloud=False)
+        pump_card_groups = group_pump_cards(pump_cards, config=config)
         return templates.TemplateResponse(
             request,
             "partials/admin_status.html",
@@ -196,13 +281,43 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
                 "rain": rain,
                 "health": health,
                 "pump_cards": pump_cards,
+                "pump_card_groups": pump_card_groups,
                 "control_mode": config.devices.control_mode,
+                "config": config,
             },
         )
 
     @router.get("/partials/status", response_class=RedirectResponse)
     async def partial_status_legacy() -> RedirectResponse:
         return RedirectResponse(url="/partials/user/status", status_code=302)
+
+    @router.post("/api/devices/probe-status")
+    async def probe_device_status() -> dict[str, Any]:
+        online_map = await service.refresh_all_pump_online_status()
+        summary: dict[str, int] = {
+            "online": 0,
+            "offline": 0,
+            "cloud_error": 0,
+            "unconfigured": 0,
+            "unknown": 0,
+        }
+        for entry in online_map.values():
+            status = entry.get("status", "unknown")
+            summary[status] = summary.get(status, 0) + 1
+        recovered = sum(
+            1
+            for entry in online_map.values()
+            if entry.get("status") == "online"
+        )
+        return {
+            "online_map": online_map,
+            "summary": summary,
+            "message": (
+                f"Checked {len(online_map)} pump(s): "
+                f"{summary['online']} online, {summary['offline']} offline"
+            ),
+            "recovered_online": recovered,
+        }
 
     @router.get("/api/status")
     async def api_status() -> dict[str, Any]:
@@ -215,6 +330,7 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
                 "confidence": rain.confidence,
                 "source": rain.source,
                 "ts": rain.ts.isoformat(),
+                "ts_local": format_local(rain.ts, config.timezone),
                 "water_present": rain.water_present,
             },
             "pumps": [
@@ -256,6 +372,11 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
                 {
                     "provider": h.provider,
                     "last_ok_at": h.last_ok_at.isoformat() if h.last_ok_at else None,
+                    "last_ok_at_local": (
+                        format_local(h.last_ok_at, config.timezone, "%Y-%m-%d %H:%M")
+                        if h.last_ok_at
+                        else None
+                    ),
                     "last_error": h.last_error,
                 }
                 for h in status["provider_health"]
@@ -272,18 +393,21 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
         content_type = request.headers.get("content-type", "")
         if "application/json" in content_type:
             payload = await request.json()
-            selected = payload.get("mode")
-            approved = bool(payload.get("approve_safety_override", False))
+            body = PumpModeRequest.model_validate(payload)
         else:
             form = await request.form()
-            selected = form.get("mode")
-            raw = form.get("approve_safety_override", "false")
-            approved = str(raw).lower() in ("true", "1", "yes")
-        if selected not in ("auto", "manual_on", "manual_off"):
+            body = PumpModeRequest.model_validate(dict(form))
+        if body.mode not in ("auto", "manual_on", "manual_off"):
             raise HTTPException(status_code=422, detail="invalid mode")
         try:
             row, cmd_result = await service.set_pump_mode(
-                name, selected, approve_safety_override=approved
+                name,
+                body.mode,
+                approve_safety_override=body.approve_safety_override,
+                manual_hours=body.manual_hours,
+                manual_minutes=body.manual_minutes,
+                manual_duration_minutes=body.manual_duration_minutes,
+                manual_until_auto=body.manual_until_auto,
             )
         except CommandLockError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -318,6 +442,47 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
             }
         return payload
 
+    @router.post("/api/devices/mode")
+    async def set_device_mode(
+        request: Request,
+        _: None = Depends(verify_auth),
+    ) -> dict[str, Any]:
+        content_type = request.headers.get("content-type", "")
+        if "application/json" in content_type:
+            payload = await request.json()
+        else:
+            payload = dict(await request.form())
+        body = DeviceModeRequest.model_validate(payload)
+        if body.mode not in ("manual_on", "manual_off"):
+            raise HTTPException(status_code=422, detail="invalid mode")
+        try:
+            result = await service.set_device_group_mode(
+                body.device_backend,
+                body.device_id,
+                body.mode,
+                approve_safety_override=body.approve_safety_override,
+                manual_hours=body.manual_hours,
+                manual_minutes=body.manual_minutes,
+                manual_duration_minutes=body.manual_duration_minutes,
+                manual_until_auto=body.manual_until_auto,
+            )
+        except CommandLockError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except DeviceCommandError as exc:
+            cmd_result = exc.result
+            raise HTTPException(
+                status_code=504,
+                detail={
+                    "message": cmd_result.message,
+                    "timed_out": cmd_result.timed_out,
+                    "retried": cmd_result.retried,
+                    "status_before_retry": cmd_result.status_before_retry,
+                },
+            ) from exc
+        return result
+
     @router.get("/api/events")
     async def api_events(
         limit: int = Query(default=50, le=500),
@@ -326,21 +491,51 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
     ) -> dict[str, Any]:
         events = service.get_events(limit=limit, pump=pump, since=since)
         return {
-            "events": [
-                {
-                    "id": e.id,
-                    "ts": e.ts.isoformat(),
-                    "pump_name": e.pump_name,
-                    "event_type": e.event_type,
-                    "reason": e.reason,
-                }
-                for e in events
-            ]
+            "timezone": config.timezone,
+            "events": service.format_events_for_ui(events),
+        }
+
+    @router.get("/api/history/controls", dependencies=[Depends(verify_auth)])
+    async def api_history_controls(
+        limit: int = Query(default=100, le=500),
+        pump: str | None = None,
+        since: str | None = None,
+        hours: int | None = Query(default=48, le=168),
+    ) -> dict[str, Any]:
+        return {
+            "controls": service.get_control_history(
+                limit=limit, pump=pump, since=since, hours=hours
+            )
+        }
+
+    @router.get("/api/history/timeline", dependencies=[Depends(verify_auth)])
+    async def api_history_timeline(
+        hours: int = Query(default=168, le=168),
+        idle_gap_minutes: int = Query(default=60, ge=5, le=240),
+    ) -> dict[str, Any]:
+        return await service.get_history_timeline(
+            hours=hours, idle_gap_minutes=idle_gap_minutes
+        )
+
+    @router.get("/api/history/forecasts", dependencies=[Depends(verify_auth)])
+    async def api_history_forecasts(
+        limit: int = Query(default=200, le=1000),
+        provider: str | None = None,
+        hours: int = Query(default=48, le=168),
+    ) -> dict[str, Any]:
+        return {
+            "forecasts": service.get_forecast_history(
+                limit=limit, provider=provider, hours=hours
+            )
         }
 
     @router.get("/api/hardware-health")
     async def api_hardware_health() -> dict[str, Any]:
-        return {"components": service.hardware.status_summary()}
+        return {
+            "components": service.hardware.status_summary(
+                timezone=config.timezone
+            )
+        }
 
     @router.get("/api/simulate/status", dependencies=[Depends(verify_auth)])
     async def api_simulate_status() -> dict[str, Any]:
@@ -388,6 +583,161 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
             "name": loc.name,
             "address": loc.address,
         }
+
+    @router.get("/api/config/display", dependencies=[Depends(verify_auth)])
+    async def api_get_display() -> dict[str, str]:
+        return {"units": config.display.units}
+
+    @router.post("/api/config/display", dependencies=[Depends(verify_auth)])
+    async def api_set_display(body: DisplayRequest) -> dict[str, str]:
+        if body.units not in ("metric", "imperial"):
+            raise HTTPException(status_code=422, detail="units must be metric or imperial")
+        units = service.update_display_units(body.units)
+        config.display.units = units  # type: ignore[assignment]
+        return {"units": units}
+
+    @router.get("/api/config/runtime", dependencies=[Depends(verify_auth)])
+    async def api_get_runtime() -> dict[str, Any]:
+        pump_cards = await service.get_pump_cards()
+        groups = group_pump_cards(pump_cards, config=config)
+        return service.get_runtime_settings(groups)
+
+    @router.post("/api/config/runtime", dependencies=[Depends(verify_auth)])
+    async def api_set_runtime(body: RuntimeSettingsRequest) -> dict[str, Any]:
+        try:
+            result = service.update_runtime_settings(
+                system_max_runtime_minutes=body.system_max_runtime_minutes,
+                device_overrides=body.devices,
+                pump_overrides=body.pumps,
+            )
+            config.safety = service.config.safety
+            config.device_runtime = service.config.device_runtime
+            config.pumps = service.config.pumps
+            return result
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.get("/api/config/names", dependencies=[Depends(verify_auth)])
+    async def api_get_names() -> dict[str, Any]:
+        pump_cards = await service.get_pump_cards()
+        groups = group_pump_cards(pump_cards, config=config)
+        return service.get_display_name_settings(groups)
+
+    @router.post("/api/config/names", dependencies=[Depends(verify_auth)])
+    async def api_set_names(body: DisplayNamesRequest) -> dict[str, Any]:
+        try:
+            result = await service.update_display_names(
+                device_labels=body.devices,
+                switch_labels=body.switches,
+                propagate_cloud=body.propagate_cloud,
+            )
+            config.device_labels = service.config.device_labels
+            config.pumps = service.config.pumps
+            return result
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"Could not write config.yaml: {exc}. "
+                    "If running in Docker, ensure config.yaml is not mounted read-only."
+                ),
+            ) from exc
+
+    @router.get("/api/config/device-order", dependencies=[Depends(verify_auth)])
+    async def api_get_device_order() -> dict[str, Any]:
+        pump_cards = await service.get_pump_cards(refresh_cloud=False)
+        groups = group_pump_cards(pump_cards, config=config)
+        return {"devices": service.get_device_display_order_settings(groups)}
+
+    @router.post("/api/config/device-order", dependencies=[Depends(verify_auth)])
+    async def api_set_device_order(body: DeviceDisplayOrderRequest) -> dict[str, Any]:
+        try:
+            devices = service.update_device_display_order(body.order)
+            config.device_display_order = service.config.device_display_order
+            return {"devices": devices}
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"Could not write config.yaml: {exc}. "
+                    "If running in Docker, ensure config.yaml is not mounted read-only."
+                ),
+            ) from exc
+
+    @router.get("/api/config/command-verify", dependencies=[Depends(verify_auth)])
+    async def api_get_command_verify() -> dict[str, Any]:
+        return service.get_command_verify_settings()
+
+    @router.post("/api/config/command-verify", dependencies=[Depends(verify_auth)])
+    async def api_set_command_verify(body: CommandVerifySettingsRequest) -> dict[str, Any]:
+        try:
+            result = service.update_command_verify_settings(
+                command_verify_delay_seconds=body.command_verify_delay_seconds,
+            )
+            config.devices = service.config.devices
+            return result
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.get("/api/config/notifications", dependencies=[Depends(verify_auth)])
+    async def api_get_notifications() -> dict[str, Any]:
+        return service.get_notification_settings()
+
+    @router.post("/api/config/notifications", dependencies=[Depends(verify_auth)])
+    async def api_set_notifications(body: NotificationSettingsRequest) -> dict[str, Any]:
+        try:
+            result = service.update_notification_settings(
+                admin_email=body.admin_email,
+                public_base_url=body.public_base_url,
+                smtp_enabled=body.smtp_enabled,
+                smtp_host=body.smtp_host,
+                smtp_port=body.smtp_port,
+                smtp_username=body.smtp_username,
+                smtp_from_addr=body.smtp_from_addr,
+                smtp_to_addrs=body.smtp_to_addrs,
+            )
+            config.notifications = service.config.notifications
+            return result
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.post("/api/config/notifications/test", dependencies=[Depends(verify_auth)])
+    async def api_test_notifications() -> dict[str, Any]:
+        return await service.send_test_notification_email()
+
+    @router.get("/api/auth/google/gmail/start")
+    async def google_gmail_start(_: None = Depends(verify_auth)) -> RedirectResponse:
+        try:
+            url = service.gmail_client.start_auth_url()
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return RedirectResponse(url, status_code=302)
+
+    @router.get("/api/auth/google/gmail/callback")
+    async def google_gmail_callback(
+        code: str = Query(default=""),
+        state: str = Query(default=""),
+        error: str = Query(default=""),
+    ) -> RedirectResponse:
+        if error:
+            return RedirectResponse(
+                f"/admin?gmail_error={error.replace(' ', '+')}",
+                status_code=302,
+            )
+        if not code or not state or not service.gmail_client.validate_state(state):
+            return RedirectResponse("/admin?gmail_error=invalid_oauth_state", status_code=302)
+        try:
+            await service.gmail_client.complete_auth(code)
+        except ValueError as exc:
+            msg = str(exc).replace(" ", "+")
+            return RedirectResponse(f"/admin?gmail_error={msg}", status_code=302)
+        return RedirectResponse("/admin?gmail=connected", status_code=302)
+
+    @router.post("/api/auth/google/gmail/disconnect", dependencies=[Depends(verify_auth)])
+    async def google_gmail_disconnect() -> dict[str, Any]:
+        return service.disconnect_google_gmail()
 
     @router.get("/api/geocode/search", dependencies=[Depends(verify_auth)])
     async def api_geocode_search(q: str = Query(min_length=1)) -> dict[str, Any]:
@@ -579,6 +929,7 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
             "pumps": [
                 {
                     "name": p.name,
+                    "label": p.label,
                     "enabled": p.enabled,
                     "tuya_device_id": p.tuya.device_id,
                     "tuya_ip": p.tuya.ip,
@@ -609,6 +960,26 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
         return {
             "removed": name,
             "pumps": [{"name": p.name, "enabled": p.enabled} for p in saved],
+        }
+
+    @router.post("/api/devices/clear-local", dependencies=[Depends(verify_auth)])
+    async def clear_local_devices_api() -> dict[str, Any]:
+        try:
+            result = await service.clear_all_local_devices()
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"Could not write config.yaml: {exc}. "
+                    "If running in Docker, ensure config.yaml is not mounted read-only."
+                ),
+            ) from exc
+        return {
+            **result,
+            "message": (
+                f"Removed {result['removed_count']} pump(s) from pumpd only. "
+                "Tuya, Meross, and SmartThings cloud devices were not changed."
+            ),
         }
 
     @router.get("/health")

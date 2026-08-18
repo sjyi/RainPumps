@@ -7,6 +7,7 @@
 <script>
 document.body.dataset.controlMode = '{{ config.devices.control_mode }}';
 document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_seconds * 1000) | int }}';
+document.body.dataset.commandWaitHintMs = '{{ ((config.api.device_command_timeout_seconds + config.devices.command_verify_delay_seconds) * 1000) | int }}';
 </script>
 <div id="status-panel" hx-get="/partials/user/status" hx-trigger="load, every 30s, refresh from:body" hx-swap="innerHTML">
   {% include "partials/user_status.html" %}

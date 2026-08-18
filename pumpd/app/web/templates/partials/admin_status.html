@@ -30,17 +30,25 @@
     <h2>Rain signal</h2>
     <p>
       <span class="badge {{ 'on' if rain.is_raining else 'off' }}">{{ 'Raining' if rain.is_raining else 'Dry' }}</span>
-      · {{ rain.rate_mm_h }} mm/h · confidence {{ (rain.confidence * 100) | round(0) }}%
+      · {{ rain.rate_mm_h | format_precip_rate(config.display.units) }} · confidence {{ (rain.confidence * 100) | round(0) }}%
     </p>
-    <p class="meta">source: {{ rain.source }} · ts: {{ rain.ts.strftime('%Y-%m-%d %H:%M:%S') }} UTC
+    <p class="meta">source: {{ rain.source }} · ts: {{ rain.ts | format_local(config.timezone) }} ({{ config.timezone }})
       {% if rain.water_present is not none %} · water_present: {{ rain.water_present }}{% endif %}
     </p>
   </div>
 
-  {% for p in pump_cards %}
-  {% with admin=true %}
-  {% include "partials/pump_card.html" %}
-  {% endwith %}
+  {% include "partials/device_probe_bar.html" %}
+
+  {% for g in pump_card_groups %}
+    {% if g.kind == 'group' %}
+    {% include "partials/pump_device_group_admin.html" %}
+    {% else %}
+      {% for p in g.pumps %}
+      {% with admin=true %}
+      {% include "partials/pump_card.html" %}
+      {% endwith %}
+      {% endfor %}
+    {% endif %}
   {% endfor %}
 </div>
 
@@ -48,7 +56,7 @@
   <h2>Next 12 h forecast</h2>
   <div class="forecast-bar">
     {% for f in status.forecast_12h %}
-    <span title="{{ f.hour_ts.strftime('%H:%M') }}: {{ f.pop_pct }}% / {{ f.rain_mm }}mm"
+    <span title="{{ f.hour_ts | format_local(config.timezone, '%H:%M') }}: {{ f.pop_pct }}% / {{ f.rain_mm | format_precip(config.display.units) }}"
           style="height:{{ [4, f.pop_pct * 0.48] | max }}px"></span>
     {% endfor %}
   </div>
@@ -57,7 +65,7 @@
 <div class="card">
   <h2>Hardware health</h2>
   <table>
-    <thead><tr><th>Component</th><th>Type</th><th>Status</th><th>Failures</th><th>Last OK</th><th>Error</th></tr></thead>
+    <thead><tr><th>Component</th><th>Type</th><th>Status</th><th>Failures</th><th>Last OK ({{ config.timezone }})</th><th>Error</th></tr></thead>
     <tbody>
       {% for h in status.hardware_health %}
       <tr>
@@ -65,7 +73,7 @@
         <td>{{ h.component_type }}</td>
         <td><span class="badge {{ h.status }}">{{ h.status }}</span></td>
         <td>{{ h.consecutive_failures }}</td>
-        <td>{{ h.last_ok_at or '—' }}</td>
+        <td>{{ h.last_ok_at_local or '—' }}</td>
         <td>{{ h.last_error or '—' }}</td>
       </tr>
       {% else %}
@@ -78,12 +86,12 @@
 <div class="card">
   <h2>Provider health</h2>
   <table>
-    <thead><tr><th>Provider</th><th>Last OK</th><th>Last error</th></tr></thead>
+    <thead><tr><th>Provider</th><th>Last OK ({{ config.timezone }})</th><th>Last error</th></tr></thead>
     <tbody>
       {% for h in status.provider_health %}
       <tr>
         <td>{{ h.provider }}</td>
-        <td>{{ h.last_ok_at.strftime('%Y-%m-%d %H:%M') if h.last_ok_at else '—' }}</td>
+        <td>{{ h.last_ok_at | format_local(config.timezone, '%Y-%m-%d %H:%M') }}</td>
         <td>{{ h.last_error or '—' }}</td>
       </tr>
       {% endfor %}

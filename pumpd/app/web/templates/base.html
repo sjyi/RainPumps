@@ -53,6 +53,7 @@
     .badge.off, .badge.idle, .badge.unconfigured { background: #f3f4f6; color: #4b5563; }
     .badge.warn, .badge.degraded, .badge.unknown { background: #fef3c7; color: #92400e; }
     .badge.fault, .badge.fail, .badge.offline { background: #fee2e2; color: #991b1b; }
+    .badge.cloud_error { background: #fef3c7; color: #92400e; }
     .badge.drain { background: #dbeafe; color: #1e40af; }
     .badge.manual { background: #ede9fe; color: #5b21b6; }
     table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
@@ -74,6 +75,60 @@
     button.danger { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
     .pump-mode-buttons { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
     .pump-mode-buttons .mode-btn { margin: 0; }
+    .manual-control-scope { margin: 0.65rem 0; }
+    .manual-control {
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 0.55rem 0.65rem;
+      margin: 0;
+    }
+    .manual-control-legend {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: #6b7280;
+      padding: 0 0.25rem;
+    }
+    .manual-duration-row,
+    .manual-limit-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.65rem;
+      align-items: center;
+      margin-top: 0.35rem;
+    }
+    .manual-duration-row label,
+    .manual-limit-option {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.82rem;
+      color: #374151;
+    }
+    .manual-duration-row input[type="number"] {
+      width: 4rem;
+      padding: 0.25rem 0.4rem;
+      border: 1px solid #d1d5db;
+      border-radius: 4px;
+      font-size: 0.82rem;
+    }
+    .manual-control-hint { margin: 0.45rem 0 0; }
+    .manual-expires { margin: 0.35rem 0 0.5rem; }
+    .manual-control-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      align-items: center;
+      margin-top: 0.55rem;
+    }
+    .manual-cancel-btn {
+      background: transparent;
+      border-color: #d1d5db;
+      color: #6b7280;
+      font-size: 0.82rem;
+      padding: 0.35rem 0.65rem;
+    }
+    .manual-control-scope.is-open .manual-control-panel { display: block; }
+    .manual-control-panel[hidden] { display: none !important; }
     button.mode-btn.is-active {
       font-weight: 600;
       box-shadow: inset 0 0 0 2px currentColor;
@@ -119,7 +174,13 @@
     button.mode-btn.htmx-request.is-active {
       opacity: 1;
     }
-    .pump-card-busy .pump-mode-buttons .mode-btn:not(.htmx-request) {
+    .pump-card-busy .pump-mode-buttons .mode-btn:not(.htmx-request),
+    .pump-card-busy .pump-card-quick-actions .mode-btn:not(.htmx-request) {
+      opacity: 0.45;
+      pointer-events: none;
+    }
+    .pump-device-busy .pump-device-quick-actions .mode-btn:not(.htmx-request),
+    .pump-device-busy .pump-device-switches .mode-btn:not(.htmx-request) {
       opacity: 0.45;
       pointer-events: none;
     }
@@ -170,6 +231,30 @@
     .forecast-bar { display: flex; gap: 2px; height: 48px; align-items: flex-end; }
     .forecast-bar span { flex: 1; background: #93c5fd; border-radius: 2px 2px 0 0; min-height: 4px; }
     .location-name { font-size: 1.15rem; font-weight: 600; margin: 0.25rem 0; }
+    .location-weather-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 1rem 1.75rem;
+    }
+    .lw-location {
+      flex: 1 1 160px;
+      min-width: 0;
+    }
+    .lw-conditions {
+      flex: 2 1 260px;
+      min-width: 0;
+    }
+    .lw-label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+      color: #6b7280;
+      font-weight: 600;
+      margin: 0 0 0.35rem;
+    }
+    .location-weather-row .current-row { gap: 0.85rem; }
+    .location-weather-row .rain-badge-col { margin-left: auto; }
     .current-row { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; }
     .weather-icon-lg { font-size: 2.75rem; line-height: 1; }
     .current-temp { font-size: 2rem; font-weight: 600; margin: 0; }
@@ -192,6 +277,165 @@
     .health-item .value { font-size: 1.1rem; font-weight: 600; margin-top: 0.25rem; }
     .override-box { margin-top: 0.75rem; padding: 0.65rem; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; font-size: 0.85rem; }
     .override-box label { display: flex; align-items: center; gap: 0.4rem; cursor: pointer; }
+    .pump-card-collapsible { padding: 0.65rem 0.85rem; margin-bottom: 0.5rem; }
+    .pump-card-collapsible .card h2 { margin: 0; }
+    .pump-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.65rem;
+      flex-wrap: wrap;
+    }
+    .pump-card-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      margin: 0;
+      padding: 0;
+      border: none;
+      background: none;
+      font: inherit;
+      font-size: 1rem;
+      font-weight: 600;
+      color: inherit;
+      cursor: pointer;
+      text-align: left;
+    }
+    .pump-card-toggle:hover .pump-card-title { color: var(--accent); }
+    .pump-card-arrow {
+      display: inline-block;
+      color: #6b7280;
+      font-size: 0.7rem;
+      line-height: 1;
+      transition: transform 0.15s ease;
+    }
+    .pump-card-collapsible.is-expanded .pump-card-arrow { transform: rotate(90deg); }
+    .pump-card-summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3rem;
+      align-items: center;
+      margin-left: auto;
+    }
+    .pump-card-summary .badge { font-size: 0.78rem; padding: 0.15rem 0.45rem; }
+    .pump-power-badge {
+      font-weight: 700;
+      font-size: 0.88rem !important;
+      padding: 0.2rem 0.55rem !important;
+      letter-spacing: 0.03em;
+    }
+    .pump-card-quick-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-top: 0.55rem;
+    }
+    .pump-card-quick-actions .mode-btn-compact {
+      margin: 0;
+      padding: 0.3rem 0.6rem;
+      font-size: 0.8rem;
+    }
+    .pump-card-collapsible .pump-command-status { margin-top: 0.45rem; margin-bottom: 0; }
+    .device-probe-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.65rem;
+      margin: 0.75rem 0 0.5rem;
+    }
+    .device-probe-bar .probe-devices-status { min-height: 1.25rem; }
+    .pump-card-details {
+      margin-top: 0.75rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid #eee;
+    }
+    .pump-card-collapsible:not(.is-expanded) .pump-card-details { display: none; }
+    .grid-compact { grid-template-columns: 1fr; gap: 0.5rem; }
+    .pump-device-group { padding: 0.85rem; }
+    .pump-device-group-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+    .pump-device-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      margin: 0;
+      padding: 0;
+      border: none;
+      background: none;
+      font: inherit;
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: inherit;
+      cursor: pointer;
+      text-align: left;
+    }
+    .pump-device-toggle:hover .pump-device-group-title { color: var(--accent); }
+    .pump-device-collapsible.is-expanded .pump-device-toggle .pump-card-arrow {
+      transform: rotate(90deg);
+    }
+    .pump-device-group-title {
+      margin: 0;
+      font-size: 1.05rem;
+    }
+    .pump-device-group-meta {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-left: auto;
+    }
+    .pump-device-quick-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-top: 0.55rem;
+    }
+    .pump-device-quick-actions .mode-btn-compact {
+      margin: 0;
+      padding: 0.3rem 0.6rem;
+      font-size: 0.8rem;
+    }
+    .pump-device-collapsible.is-expanded .pump-device-quick-actions,
+    .pump-device-collapsible.is-expanded .pump-device-command-status {
+      display: none;
+    }
+    .pump-device-command-status {
+      display: none;
+      margin: 0.45rem 0 0;
+      padding: 0.55rem 0.7rem;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      line-height: 1.35;
+    }
+    .pump-device-command-status.is-pending,
+    .pump-device-command-status.is-ok,
+    .pump-device-command-status.is-error {
+      display: block;
+    }
+    .pump-device-collapsible.is-expanded .pump-device-switches {
+      display: flex;
+      margin-top: 0.65rem;
+      padding-top: 0.65rem;
+      border-top: 1px solid #e5e7eb;
+    }
+    .pump-device-collapsible:not(.is-expanded) .pump-device-switches { display: none; }
+    .pump-device-switches {
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+    .pump-card-nested {
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 0.55rem 0.7rem;
+      margin-bottom: 0;
+    }
+    .pump-card-nested .pump-card-toggle { font-size: 0.92rem; }
+    .pump-card-nested .pump-card-summary .badge { font-size: 0.72rem; }
   </style>
   {% block extra_head %}{% endblock %}
 </head>
@@ -229,12 +473,22 @@
       return btn.dataset.modeAction || btn.textContent.trim();
     }
 
-    function getPumpCard(btn) {
-      return btn.closest('.pump-card');
+    function getCommandScope(btn) {
+      return btn.closest('.pump-card') || btn.closest('.pump-device-collapsible');
     }
 
-    function getStatusEl(card) {
-      return card && card.querySelector('.pump-command-status');
+    function getStatusEl(scope) {
+      if (!scope) return null;
+      return (
+        scope.querySelector('.pump-command-status')
+        || scope.querySelector('.pump-device-command-status')
+      );
+    }
+
+    function setScopeBusy(scope, busy) {
+      if (!scope) return;
+      scope.classList.toggle('pump-card-busy', busy && scope.classList.contains('pump-card'));
+      scope.classList.toggle('pump-device-busy', busy && scope.classList.contains('pump-device-collapsible'));
     }
 
     function restoreButtonLabel(btn) {
@@ -243,17 +497,29 @@
       }
     }
 
-    function commandTimeoutMs() {
-      const ms = Number(document.body.dataset.commandTimeoutMs);
-      return Number.isFinite(ms) && ms > 0 ? ms : 10000;
+    function commandWaitHintMs() {
+      const waitMs = Number(document.body.dataset.commandWaitHintMs);
+      if (Number.isFinite(waitMs) && waitMs > 0) {
+        return waitMs;
+      }
+      const sendMs = Number(document.body.dataset.commandTimeoutMs);
+      return Number.isFinite(sendMs) && sendMs > 0 ? sendMs + 15000 : 25000;
     }
 
-    function showRetryHint(card, status, actionLabel) {
-      status.className = 'pump-command-status is-pending is-retry-hint';
+    function commandTimeoutMs() {
+      const ms = Number(document.body.dataset.commandTimeoutMs);
+      return Number.isFinite(ms) && ms > 0 ? ms : 20000;
+    }
+
+    function showWaitHint(scope, status, actionLabel) {
+      const statusClass = scope.classList.contains('pump-device-collapsible')
+        ? 'pump-device-command-status'
+        : 'pump-command-status';
+      status.className = statusClass + ' is-pending is-retry-hint';
       status.innerHTML =
         '<span class="cmd-spinner" aria-hidden="true"></span>' +
-        '<span>Initial request timed out — querying device status and retrying ' +
-        '<strong>' + actionLabel + '</strong> on ' + controlTarget() + '…</span>';
+        '<span>Waiting for Tuya cloud to confirm <strong>' + actionLabel +
+        '</strong> on ' + controlTarget() + '…</span>';
     }
 
     function clearCommandHintTimer(btn) {
@@ -284,22 +550,53 @@
       return 'Command failed — please try again';
     }
 
+    function mergeManualRequestParams(parameters, payload) {
+      if (!parameters || !payload) return;
+      Object.keys(payload).forEach(function(key) {
+        parameters[key] = payload[key];
+      });
+    }
+
+    document.body.addEventListener('htmx:configRequest', function(evt) {
+      const btn = evt.target;
+      if (!btn || !btn.classList) return;
+
+      let payload = null;
+      if (btn.classList.contains('manual-apply-btn')) {
+        payload = btn.closest('.pump-device-group')
+          ? window.deviceGroupManualApplyPayload(btn)
+          : window.pumpManualApplyPayload(btn);
+      } else if (btn.dataset && btn.dataset.manualMode) {
+        payload = btn.closest('.pump-device-quick-actions')
+          ? window.deviceGroupManualPayload(btn, btn.dataset.manualMode)
+          : window.pumpManualPayload(btn, btn.dataset.manualMode);
+      }
+      if (payload) {
+        mergeManualRequestParams(evt.detail.parameters, payload);
+      }
+    });
+
     document.body.addEventListener('htmx:beforeRequest', function(evt) {
       const btn = evt.detail.elt;
+      if (btn.dataset && btn.dataset.manualMode) {
+        window.openManualControlPanel(btn);
+      }
       if (!btn.classList || !btn.classList.contains('mode-btn')) return;
 
-      const card = getPumpCard(btn);
-      const status = getStatusEl(card);
-      if (!card || !status) return;
+      const scope = getCommandScope(btn);
+      const status = getStatusEl(scope);
+      if (!scope || !status) return;
 
       if (!btn.dataset.originalLabel) {
         btn.dataset.originalLabel = btn.textContent.trim();
       }
       btn.textContent = 'Sending…';
 
-      card.classList.add('pump-card-busy');
+      setScopeBusy(scope, true);
       status.hidden = false;
-      status.className = 'pump-command-status is-pending';
+      status.className = (scope.classList.contains('pump-device-collapsible')
+        ? 'pump-device-command-status'
+        : 'pump-command-status') + ' is-pending';
       status.innerHTML =
         '<span class="cmd-spinner" aria-hidden="true"></span>' +
         '<span>Sending <strong>' + modeLabel(btn) + '</strong> — waiting for response from ' +
@@ -307,38 +604,341 @@
 
       clearCommandHintTimer(btn);
       btn.dataset.commandHintTimer = String(setTimeout(function() {
-        if (card.classList.contains('pump-card-busy')) {
-          showRetryHint(card, status, modeLabel(btn));
+        if (scope.classList.contains('pump-card-busy') || scope.classList.contains('pump-device-busy')) {
+          showWaitHint(scope, status, modeLabel(btn));
         }
-      }, commandTimeoutMs()));
+      }, commandWaitHintMs()));
     });
 
     document.body.addEventListener('htmx:afterRequest', function(evt) {
       const btn = evt.detail.elt;
       if (!btn.classList || !btn.classList.contains('mode-btn')) return;
 
-      const card = getPumpCard(btn);
-      const status = getStatusEl(card);
-      if (!card || !status) return;
+      const scope = getCommandScope(btn);
+      const status = getStatusEl(scope);
+      if (!scope || !status) return;
 
       clearCommandHintTimer(btn);
       restoreButtonLabel(btn);
-      card.classList.remove('pump-card-busy');
+      setScopeBusy(scope, false);
 
+      const statusClass = scope.classList.contains('pump-device-collapsible')
+        ? 'pump-device-command-status'
+        : 'pump-command-status';
       const body = parseResponseBody(evt.detail.xhr);
 
       if (evt.detail.successful) {
-        status.className = 'pump-command-status is-ok';
+        status.className = statusClass + ' is-ok';
         if (body && body.command && body.command.retried) {
           status.textContent = body.command.message || 'Command succeeded after retry — updating status…';
+        } else if (body && body.pumps) {
+          status.textContent = 'All outlets updated — refreshing status…';
         } else {
           status.textContent = 'Command accepted — updating status…';
         }
         return;
       }
 
-      status.className = 'pump-command-status is-error';
+      status.className = statusClass + ' is-error';
       status.textContent = formatErrorMessage(evt.detail.xhr);
+    });
+
+    var PUMP_EXPANDED_KEY = 'pumpCardExpanded';
+    var DEVICE_EXPANDED_KEY = 'pumpDeviceExpanded';
+
+    function getExpandedPumps() {
+      try {
+        return new Set(JSON.parse(sessionStorage.getItem(PUMP_EXPANDED_KEY) || '[]'));
+      } catch (_) {
+        return new Set();
+      }
+    }
+
+    function getExpandedDevices() {
+      try {
+        return new Set(JSON.parse(sessionStorage.getItem(DEVICE_EXPANDED_KEY) || '[]'));
+      } catch (_) {
+        return new Set();
+      }
+    }
+
+    function saveExpandedPumps(set) {
+      sessionStorage.setItem(PUMP_EXPANDED_KEY, JSON.stringify(Array.from(set)));
+    }
+
+    function saveExpandedDevices(set) {
+      sessionStorage.setItem(DEVICE_EXPANDED_KEY, JSON.stringify(Array.from(set)));
+    }
+
+    function captureExpandedStateFromDom(root) {
+      if (!root) return;
+      var pumps = getExpandedPumps();
+      root.querySelectorAll('.pump-card-collapsible.is-expanded').forEach(function(card) {
+        var name = card.dataset.pumpName;
+        if (name) pumps.add(name);
+      });
+      saveExpandedPumps(pumps);
+
+      var devices = getExpandedDevices();
+      root.querySelectorAll('.pump-device-collapsible.is-expanded').forEach(function(group) {
+        var key = group.dataset.deviceKey;
+        if (key) devices.add(key);
+      });
+      saveExpandedDevices(devices);
+    }
+
+    function applyPumpCardExpandedState(root) {
+      if (!root) return;
+      var expanded = getExpandedPumps();
+      root.querySelectorAll('.pump-card-collapsible').forEach(function(card) {
+        var name = card.dataset.pumpName;
+        var isExpanded = expanded.has(name);
+        card.classList.toggle('is-expanded', isExpanded);
+        var btn = card.querySelector('.pump-card-toggle');
+        if (btn) btn.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+      });
+    }
+
+    function applyDeviceGroupExpandedState(root) {
+      if (!root) return;
+      var expanded = getExpandedDevices();
+      root.querySelectorAll('.pump-device-collapsible').forEach(function(group) {
+        var key = group.dataset.deviceKey;
+        var isExpanded = expanded.has(key);
+        group.classList.toggle('is-expanded', isExpanded);
+        var btn = group.querySelector('.pump-device-toggle');
+        if (btn) btn.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+      });
+    }
+
+    function applyDashboardExpandedState(root) {
+      applyPumpCardExpandedState(root);
+      applyDeviceGroupExpandedState(root);
+    }
+
+    function isStatusPanelNode(node) {
+      return node && node.id === 'status-panel';
+    }
+
+    function handleStatusPanelRefresh(root) {
+      if (!root) root = document.getElementById('status-panel');
+      if (!root) return;
+      applyDashboardExpandedState(root);
+      if (window.closeManualControlPanels) window.closeManualControlPanels(root);
+    }
+
+    var probeDevicesInFlight = false;
+
+    async function probeAllDeviceConnections(statusEl) {
+      if (probeDevicesInFlight) return;
+      probeDevicesInFlight = true;
+      if (statusEl) statusEl.textContent = 'Checking device connections…';
+      try {
+        var response = await fetch('/api/devices/probe-status', { method: 'POST' });
+        if (!response.ok) {
+          if (statusEl) statusEl.textContent = 'Connection check failed.';
+          return;
+        }
+        var data = await response.json();
+        if (statusEl && data.message) statusEl.textContent = data.message;
+        if (window.htmx) htmx.trigger('#status-panel', 'load');
+      } catch (err) {
+        if (statusEl) statusEl.textContent = 'Connection check failed.';
+      } finally {
+        probeDevicesInFlight = false;
+      }
+    }
+
+    document.body.addEventListener('click', function(evt) {
+      var probeBtn = evt.target.closest('.probe-devices-btn');
+      if (probeBtn) {
+        var bar = probeBtn.closest('.device-probe-bar');
+        var statusEl = bar ? bar.querySelector('.probe-devices-status') : null;
+        probeAllDeviceConnections(statusEl);
+        return;
+      }
+
+      var deviceBtn = evt.target.closest('.pump-device-toggle');
+      if (deviceBtn) {
+        var group = deviceBtn.closest('.pump-device-collapsible');
+        if (!group) return;
+        var deviceKey = group.dataset.deviceKey;
+        var deviceExpanded = getExpandedDevices();
+        var deviceNowExpanded = !group.classList.contains('is-expanded');
+        group.classList.toggle('is-expanded', deviceNowExpanded);
+        deviceBtn.setAttribute('aria-expanded', deviceNowExpanded ? 'true' : 'false');
+        if (deviceNowExpanded) deviceExpanded.add(deviceKey);
+        else deviceExpanded.delete(deviceKey);
+        saveExpandedDevices(deviceExpanded);
+        return;
+      }
+
+      var btn = evt.target.closest('.pump-card-toggle');
+      if (!btn) return;
+      var card = btn.closest('.pump-card-collapsible');
+      if (!card) return;
+      var name = card.dataset.pumpName;
+      var expanded = getExpandedPumps();
+      var nowExpanded = !card.classList.contains('is-expanded');
+      card.classList.toggle('is-expanded', nowExpanded);
+      btn.setAttribute('aria-expanded', nowExpanded ? 'true' : 'false');
+      if (nowExpanded) expanded.add(name);
+      else expanded.delete(name);
+      saveExpandedPumps(expanded);
+    });
+
+    document.body.addEventListener('htmx:beforeSwap', function(evt) {
+      if (isStatusPanelNode(evt.detail.target)) {
+        captureExpandedStateFromDom(evt.detail.target);
+      }
+    });
+
+    document.body.addEventListener('htmx:afterSwap', function(evt) {
+      if (isStatusPanelNode(evt.detail.target)) {
+        handleStatusPanelRefresh(evt.detail.target);
+      }
+    });
+
+    document.body.addEventListener('htmx:afterSettle', function(evt) {
+      if (isStatusPanelNode(evt.detail.target)) {
+        handleStatusPanelRefresh(evt.detail.target);
+      }
+    });
+
+    handleStatusPanelRefresh(document.getElementById('status-panel'));
+
+    window.manualControlScopeFor = function(btn) {
+      var card = btn.closest('.pump-card, .pump-card-nested, .name-edit-scope, .pump-device-group');
+      return card ? card.querySelector('.manual-control-scope') : null;
+    };
+
+    window.findManualControlScope = function(btn) {
+      var scope = btn.closest('.manual-control-scope');
+      if (scope) return scope;
+      return window.manualControlScopeFor(btn);
+    };
+
+    window.manualPayloadFromScope = function(scope, mode) {
+      var payload = { mode: mode };
+      if (!scope) return payload;
+      var hoursEl = scope.querySelector('.manual-hours');
+      var minutesEl = scope.querySelector('.manual-minutes');
+      var untilAutoEl = scope.querySelector('.manual-limit-auto');
+      payload.manual_hours = parseInt(hoursEl && hoursEl.value ? hoursEl.value : '0', 10) || 0;
+      payload.manual_minutes = parseInt(minutesEl && minutesEl.value ? minutesEl.value : '0', 10) || 0;
+      payload.manual_until_auto = !!(untilAutoEl && untilAutoEl.checked);
+      return payload;
+    };
+
+    window.pumpManualPayload = function(btn, mode) {
+      var scope = window.findManualControlScope(btn);
+      var payload = window.manualPayloadFromScope(scope, mode);
+      if (btn.dataset.manualOverride === 'true') {
+        var pumpName = scope && scope.dataset.pumpName;
+        var overrideEl = pumpName ? document.getElementById('override-' + pumpName) : null;
+        payload.approve_safety_override = !!(overrideEl && overrideEl.checked);
+      }
+      return payload;
+    };
+
+    window.deviceGroupManualPayload = function(btn, mode) {
+      var group = btn.closest('.pump-device-group');
+      var scope = group ? group.querySelector('.manual-control-scope') : null;
+      var payload = window.manualPayloadFromScope(scope, mode);
+      if (group) {
+        payload.device_backend = group.dataset.deviceBackend || '';
+        payload.device_id = group.dataset.deviceId || '';
+      }
+      return payload;
+    };
+
+    window.closeManualControlPanel = function(el) {
+      var scope = (el && el.classList && el.classList.contains('manual-control-scope'))
+        ? el
+        : (el && el.closest ? el.closest('.manual-control-scope') : null);
+      if (!scope) return;
+      var panel = scope.querySelector('.manual-control-panel');
+      scope.classList.remove('is-open');
+      delete scope.dataset.pendingMode;
+      delete scope.dataset.manualOverride;
+      if (panel) panel.hidden = true;
+    };
+
+    window.closeManualControlPanels = function(root) {
+      var container = root || document;
+      container.querySelectorAll('.manual-control-scope.is-open').forEach(function(scope) {
+        window.closeManualControlPanel(scope);
+      });
+    };
+
+    window.openManualControlPanel = function(trigger) {
+      var scope = window.manualControlScopeFor(trigger);
+      if (!scope) return;
+      var mode = trigger.dataset.manualMode;
+      if (!mode) return;
+
+      window.closeManualControlPanels();
+
+      var card = trigger.closest('.pump-card-collapsible');
+      if (card && !card.classList.contains('is-expanded')) {
+        card.classList.add('is-expanded');
+        var toggle = card.querySelector('.pump-card-toggle');
+        if (toggle) toggle.setAttribute('aria-expanded', 'true');
+        var name = card.dataset.pumpName;
+        if (name) {
+          var pumps = getExpandedPumps();
+          pumps.add(name);
+          saveExpandedPumps(pumps);
+        }
+      }
+
+      scope.dataset.pendingMode = mode;
+      if (trigger.dataset.manualOverride === 'true') {
+        scope.dataset.manualOverride = 'true';
+      } else {
+        delete scope.dataset.manualOverride;
+      }
+
+      var panel = scope.querySelector('.manual-control-panel');
+      if (panel) panel.hidden = false;
+      scope.classList.add('is-open');
+
+      var applyBtn = scope.querySelector('.manual-apply-btn');
+      if (applyBtn) {
+        applyBtn.classList.remove('mode-on', 'mode-off');
+        applyBtn.classList.add(mode === 'manual_on' ? 'mode-on' : 'mode-off');
+      }
+    };
+
+    window.pumpManualApplyPayload = function(applyBtn) {
+      var scope = applyBtn.closest('.manual-control-scope');
+      var mode = scope && scope.dataset.pendingMode ? scope.dataset.pendingMode : 'manual_on';
+      var payload = window.manualPayloadFromScope(scope, mode);
+      if (scope && scope.dataset.manualOverride === 'true') {
+        var pumpName = scope.dataset.pumpName;
+        var overrideEl = pumpName ? document.getElementById('override-' + pumpName) : null;
+        payload.approve_safety_override = !!(overrideEl && overrideEl.checked);
+      }
+      return payload;
+    };
+
+    window.deviceGroupManualApplyPayload = function(applyBtn) {
+      var scope = applyBtn.closest('.manual-control-scope');
+      var mode = scope && scope.dataset.pendingMode ? scope.dataset.pendingMode : 'manual_on';
+      var payload = window.manualPayloadFromScope(scope, mode);
+      if (scope) {
+        payload.device_backend = scope.dataset.deviceBackend || '';
+        payload.device_id = scope.dataset.deviceId || '';
+      }
+      return payload;
+    };
+
+    document.body.addEventListener('click', function(evt) {
+      var cancelBtn = evt.target.closest('.manual-cancel-btn');
+      if (cancelBtn) {
+        evt.preventDefault();
+        window.closeManualControlPanel(cancelBtn);
+      }
     });
   })();
   </script>

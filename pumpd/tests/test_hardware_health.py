@@ -67,3 +67,11 @@ def test_sensor_stale_when_no_confidence(monitor: HardwareMonitor) -> None:
     monitor.check_sensor_stale(rain)
     row = monitor.get_all()[0]
     assert row.status == "fault"
+
+
+def test_status_summary_includes_local_timestamp(monitor: HardwareMonitor) -> None:
+    monitor.record_pump_success("p1")
+    summary = monitor.status_summary(timezone="America/New_York")
+    assert len(summary) == 1
+    assert summary[0]["last_ok_at_local"] is not None
+    assert "T" not in summary[0]["last_ok_at_local"]
