@@ -6,6 +6,9 @@ location:
   name: ""
   address: ""
 
+display:
+  units: imperial   # imperial (°F, in) or metric (°C, mm)
+
 weather:
   poll_minutes: 30
   providers: [open_meteo, nws]
@@ -17,19 +20,20 @@ rules:
   lookahead_hours: 2
   post_rain_drain_minutes: 30
   sensor_dry_minutes: 10
-  manual_revert_hours: 4
+  manual_revert_minutes: 5
   duty_cycle:
     enabled: false
     on_minutes: 10
     off_minutes: 20
 
 safety:
-  max_continuous_runtime_minutes: 60
+  max_continuous_runtime_minutes: 180
   min_cooldown_minutes: 15
   watchdog_stale_forecast_hours: 3
 
 pumps:
   - name: north_pump
+    label: "North roof outlet"  # optional display name (Admin → Device & switch names)
     enabled: true
     tuya:
       device_id: ""
@@ -45,6 +49,9 @@ pumps:
       device_id: ""
 
 notifications:
+  # admin_email, public_base_url, and smtp settings: Admin → Email notifications
+  public_base_url: "http://localhost:8080"
+  admin_email: ""
   ntfy:
     enabled: true
     url: "https://ntfy.sh"
@@ -83,5 +90,28 @@ devices:
   control_mode: auto
   # Delay between turning on switch_2, switch_3, … on the same multi-outlet plug
   switch_stagger_seconds: 30
+  command_verify_delay_seconds: 15
+  command_verify_max_attempts: 3
+  # Re-check pumps marked offline/unknown on this interval (0 = disabled)
+  online_probe_recovery_minutes: 5
+
+# Optional per-device max continuous runtime (minutes). Omitted switches inherit device, then system.
+# device_runtime:
+#   - device_backend: tuya
+#     device_id: "your_device_id"
+#     max_runtime_minutes: 120
+
+# Optional cloud device display names (Admin → Device & switch names)
+# device_labels:
+#   - device_backend: tuya
+#     device_id: "your_device_id"
+#     label: "Roof east plug"
+
+# Optional dashboard device group order (Admin → Device display order)
+# device_display_order:
+#   - device_backend: meross
+#     device_id: "your_device_uuid"
+#   - device_backend: meross
+#     device_id: "another_device_uuid"
 
 database_url: sqlite:///./data/pumpd.db

@@ -1,50 +1,61 @@
-<div class="card location-card">
-  <h2>Location</h2>
-  <p class="location-name">{{ status.location.label }}</p>
-  <p class="meta">{{ status.location.latitude | round(4) }}, {{ status.location.longitude | round(4) }} · {{ status.location.timezone }}</p>
-</div>
+<div class="card location-weather-card">
+  <div class="location-weather-row">
+    <section class="lw-location">
+      <p class="lw-label">Location</p>
+      <p class="location-name">{{ status.location.label }}</p>
+      <p class="meta">{{ status.location.latitude | round(4) }}, {{ status.location.longitude | round(4) }} · {{ status.location.timezone }}</p>
+    </section>
 
-{% if status.current %}
-<div class="card current-weather">
-  <h2>Current conditions</h2>
-  <div class="current-row">
-    <span class="weather-icon-lg">{{ status.current.weather_code | weather_icon(status.current.is_day) }}</span>
-    <div>
-      <p class="current-temp">{{ status.current.temp_c | round(0) }}°C</p>
-      <p class="meta">{{ status.current.description }} · Humidity {{ status.current.humidity_pct | round(0) }}%</p>
-      {% if status.current.precipitation_mm > 0 %}
-      <p class="meta">Precipitation now: {{ status.current.precipitation_mm }} mm</p>
-      {% endif %}
-    </div>
-    <div class="rain-badge-col">
-      {% if rain.is_raining %}
-      <span class="badge running">Rain detected</span>
+    <section class="lw-conditions">
+      <p class="lw-label">Current conditions</p>
+      {% if status.current %}
+      <div class="current-row">
+        <span class="weather-icon-lg">{{ status.current.weather_code | weather_icon(status.current.is_day) }}</span>
+        <div>
+          <p class="current-temp">{{ status.current.temp_c | format_temp(config.display.units) }}</p>
+          <p class="meta">{{ status.current.description }} · Humidity {{ status.current.humidity_pct | round(0) }}%</p>
+          {% if status.current.precipitation_mm > 0 %}
+          <p class="meta">Precipitation now: {{ status.current.precipitation_mm | format_precip(config.display.units) }}</p>
+          {% endif %}
+        </div>
+        <div class="rain-badge-col">
+          {% if rain.is_raining %}
+          <span class="badge running">Rain detected</span>
+          {% else %}
+          <span class="badge idle">Dry</span>
+          {% endif %}
+          {% if rain.rate_mm_h > 0 %}
+          <p class="meta">{{ rain.rate_mm_h | format_precip_rate(config.display.units) }}</p>
+          {% endif %}
+        </div>
+      </div>
       {% else %}
-      <span class="badge idle">Dry</span>
+      <div class="current-row">
+        <div>
+          {% if rain.is_raining %}
+          <span class="badge running">Rain detected</span>
+          {% else %}
+          <span class="badge idle">Dry</span>
+          {% endif %}
+          <p class="meta" style="margin-top:0.35rem">Loading current conditions…</p>
+        </div>
+      </div>
       {% endif %}
-      {% if rain.rate_mm_h > 0 %}
-      <p class="meta">{{ rain.rate_mm_h }} mm/h</p>
-      {% endif %}
-    </div>
+    </section>
   </div>
 </div>
-{% else %}
-<div class="card">
-  <h2>Weather</h2>
-  <p>
-    {% if rain.is_raining %}
-    <span class="badge running">Rain detected</span>
-    {% else %}
-    <span class="badge idle">Dry</span>
-    {% endif %}
-  </p>
-  <p class="meta">Loading current conditions…</p>
-</div>
-{% endif %}
 
-<div class="grid">
-  {% for p in pump_cards %}
-  {% include "partials/pump_card.html" %}
+{% include "partials/device_probe_bar.html" %}
+
+<div class="grid grid-compact">
+  {% for g in pump_card_groups %}
+    {% if g.kind == 'group' %}
+    {% include "partials/pump_device_group.html" %}
+    {% else %}
+      {% for p in g.pumps %}
+      {% include "partials/pump_card.html" %}
+      {% endfor %}
+    {% endif %}
   {% endfor %}
 </div>
 
@@ -52,7 +63,7 @@
   <h2>Rain forecast — next 12 hours</h2>
   <div class="forecast-labeled">
     {% for f in status.forecast_12h_local %}
-    <div class="forecast-hour" title="{{ f.pop_pct | round(0) }}% chance, {{ f.rain_mm }} mm">
+    <div class="forecast-hour" title="{{ f.pop_pct | round(0) }}% chance, {{ f.rain_mm | format_precip(config.display.units) }}">
       <span class="forecast-bar-mini" style="height:{{ [4, f.pop_pct * 0.48] | max }}px"></span>
       <span class="forecast-time">{{ f.hour }}</span>
       <span class="forecast-pop">{{ f.pop_pct | round(0) }}%</span>
@@ -70,10 +81,10 @@
     <div class="forecast-day">
       <span class="day-name">{{ d.day_name }}</span>
       <span class="day-icon">{{ d.weather_code | weather_icon(true) }}</span>
-      <span class="day-temps">{{ d.temp_max_c | round(0) }}° / {{ d.temp_min_c | round(0) }}°</span>
+      <span class="day-temps">{{ d.temp_max_c | format_temp(config.display.units) }} / {{ d.temp_min_c | format_temp(config.display.units) }}</span>
       <span class="day-rain">{{ d.pop_max_pct | round(0) }}%</span>
       {% if d.precip_sum_mm > 0 %}
-      <span class="day-mm">{{ d.precip_sum_mm | round(1) }} mm</span>
+      <span class="day-mm">{{ d.precip_sum_mm | format_precip(config.display.units) }}</span>
       {% endif %}
     </div>
     {% endfor %}

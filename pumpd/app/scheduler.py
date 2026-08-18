@@ -29,5 +29,13 @@ def create_scheduler(config: AppConfig, service: PumpService) -> AsyncIOSchedule
         id="run_evaluation",
         replace_existing=True,
     )
+    if config.devices.online_probe_recovery_minutes > 0:
+        scheduler.add_job(
+            service.recover_offline_pump_status,
+            "interval",
+            minutes=config.devices.online_probe_recovery_minutes,
+            id="recover_offline_pump_status",
+            replace_existing=True,
+        )
 
     return scheduler

@@ -8,7 +8,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <style>
   #location-map { height: 320px; border-radius: 8px; margin: 0.75rem 0; }
-  .location-form { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
+  .location-form { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 0.5rem; }
   .location-form input[type="text"] { flex: 1; min-width: 200px; padding: 0.45rem 0.65rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.875rem; }
   .search-results { list-style: none; padding: 0; margin: 0; max-height: 160px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 6px; }
   .search-results li { padding: 0.5rem 0.65rem; cursor: pointer; border-bottom: 1px solid #f3f4f6; font-size: 0.875rem; }
@@ -20,6 +20,24 @@
   .import-table input[type="text"] { width: 100%; padding: 0.3rem 0.45rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.8rem; }
   .import-table .mono { font-family: ui-monospace, monospace; font-size: 0.75rem; color: #4b5563; }
   .import-errors { color: #b45309; font-size: 0.85rem; margin: 0.5rem 0; }
+  .import-danger-zone {
+    margin-top: 1.25rem;
+    padding-top: 1rem;
+    border-top: 1px solid #fecaca;
+  }
+  .import-danger-zone h3 {
+    margin: 0 0 0.35rem;
+    font-size: 0.95rem;
+    color: #991b1b;
+  }
+  .import-danger-zone .danger-btn {
+    background: #fee2e2;
+    color: #991b1b;
+    border: 1px solid #fca5a5;
+  }
+  .import-danger-zone .danger-btn:hover:not(:disabled) {
+    background: #fecaca;
+  }
   .section-header {
     display: flex;
     align-items: center;
@@ -45,6 +63,505 @@
   .section-toggle:hover { background: #f9fafb; }
   .collapsible-body { margin-top: 0.75rem; }
   .collapsible-body.is-collapsed { display: none; }
+  .history-timeline-root { min-height: 120px; }
+  .tl-loading, .tl-error { font-size: 0.875rem; color: #6b7280; padding: 0.5rem 0; }
+  .tl-error { color: #991b1b; }
+  .tl-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.8rem;
+    color: #6b7280;
+    margin-bottom: 0.5rem;
+  }
+  .tl-meta-hint { flex: 1; min-width: 160px; }
+  .tl-refresh {
+    margin: 0;
+    padding: 0.25rem 0.55rem;
+    font-size: 0.8rem;
+  }
+  .tl-scroll {
+    overflow-x: scroll;
+    overflow-y: hidden;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    background: #fafafa;
+    padding: 0.35rem 0 0.15rem;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: #9ca3af #e5e7eb;
+  }
+  .tl-scroll::-webkit-scrollbar {
+    height: 11px;
+  }
+  .tl-scroll::-webkit-scrollbar-track {
+    background: #e5e7eb;
+    border-radius: 0 0 6px 6px;
+  }
+  .tl-scroll::-webkit-scrollbar-thumb {
+    background: #9ca3af;
+    border-radius: 6px;
+    border: 2px solid #e5e7eb;
+  }
+  .tl-scroll::-webkit-scrollbar-thumb:hover {
+    background: #6b7280;
+  }
+  .tl-scroll-inner { min-width: min-content; }
+  .tl-scroll-nav {
+    display: flex;
+    gap: 0.35rem;
+    margin-left: auto;
+  }
+  .tl-scroll-nav button {
+    margin: 0;
+    padding: 0.25rem 0.55rem;
+    font-size: 0.75rem;
+  }
+  .tl-axis-row, .tl-row {
+    display: flex;
+    align-items: stretch;
+    min-height: 28px;
+  }
+  .tl-label {
+    flex-shrink: 0;
+    padding: 0.35rem 0.5rem 0.35rem 0.25rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: #374151;
+    display: flex;
+    align-items: center;
+    gap: 0.15rem;
+    border-right: 1px solid #e5e7eb;
+    background: #fff;
+    position: sticky;
+    left: 0;
+    z-index: 2;
+  }
+  .tl-row-system .tl-label { font-weight: 600; }
+  .tl-row-device .tl-label { padding-left: 0.75rem; font-weight: 500; }
+  .tl-row-switch .tl-label {
+    padding-left: 1.35rem;
+    font-weight: 400;
+    color: #6b7280;
+    font-size: 0.75rem;
+  }
+  .tl-toggle {
+    flex-shrink: 0;
+    width: 1.35rem;
+    height: 1.35rem;
+    padding: 0;
+    margin: 0 0.1rem 0 0;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: #6b7280;
+    font-size: 0.65rem;
+    line-height: 1;
+  }
+  .tl-toggle:hover { color: #374151; }
+  .tl-toggle-spacer { display: inline-block; width: 1.35rem; flex-shrink: 0; }
+  .tl-track-wrap {
+    flex: 0 0 auto;
+    position: relative;
+    min-height: 24px;
+    display: flex;
+    align-items: center;
+    padding: 0.2rem 0.5rem;
+  }
+  .tl-track {
+    position: relative;
+    height: 18px;
+  }
+  .tl-seg {
+    position: absolute;
+    top: 2px;
+    height: 14px;
+    border-radius: 3px;
+  }
+  .tl-seg.tl-on { background: #059669; }
+  .tl-seg.tl-off { background: #e5e7eb; }
+  .tl-seg.tl-gap {
+    background: #f3f4f6;
+    color: #9ca3af;
+    font-size: 0.7rem;
+    line-height: 14px;
+    text-align: center;
+    border: 1px dashed #d1d5db;
+    top: 1px;
+    height: 16px;
+  }
+  .tl-marker {
+    position: absolute;
+    top: -1px;
+    width: 6px;
+    height: 18px;
+    border-radius: 2px;
+    transform: translateX(-3px);
+    pointer-events: auto;
+  }
+  .tl-marker-on { background: #047857; box-shadow: 0 0 0 1px #fff; }
+  .tl-marker-off { background: #9ca3af; box-shadow: 0 0 0 1px #fff; }
+  .tl-marker-on.failed {
+    background: transparent;
+    border: 2px dashed #d97706;
+    box-shadow: none;
+  }
+  .tl-marker-off.failed {
+    background: #fde68a;
+    border: 1px solid #d97706;
+  }
+  .tl-view-btn { font-weight: 600; }
+  .runtime-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: end;
+    margin-bottom: 0.5rem;
+  }
+  .runtime-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.85rem;
+    font-weight: 500;
+  }
+  .runtime-form input[type="number"] {
+    width: 6rem;
+    padding: 0.35rem 0.5rem;
+  }
+  .notification-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    margin: 0.75rem 0 0.25rem;
+  }
+  .notification-test-block {
+    margin-top: 1rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #f9fafb;
+  }
+  .notification-test-block h3 {
+    margin: 0 0 0.35rem;
+    font-size: 0.95rem;
+  }
+  .notification-test-block .meta {
+    margin: 0 0 0.65rem;
+  }
+  .notification-test-block button.primary {
+    margin: 0;
+  }
+  .google-signin-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.55rem 1rem;
+    border: 1px solid #dadce0;
+    border-radius: 6px;
+    background: #fff;
+    color: #3c4043;
+    font-size: 0.9rem;
+    font-weight: 500;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .google-signin-btn:hover { background: #f8f9fa; box-shadow: 0 1px 2px rgba(60,64,67,.15); }
+  .google-connected {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    margin: 0.5rem 0;
+  }
+  .smtp-advanced summary {
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.9rem;
+    margin: 0.75rem 0 0.35rem;
+  }
+  .notification-status.is-ok { color: #047857; }
+  .notification-status.is-error { color: #b45309; }
+  .runtime-table { width: 100%; margin-top: 0.35rem; font-size: 0.85rem; }
+  .runtime-table td, .runtime-table th { padding: 0.4rem 0.35rem; }
+  .runtime-device-row td { background: #f9fafb; }
+  .runtime-switch-row .runtime-switch-label { padding-left: 1.25rem; color: #4b5563; }
+  .runtime-table input[type="number"] {
+    width: 5.5rem;
+    padding: 0.25rem 0.4rem;
+    font-size: 0.85rem;
+  }
+  .name-edit-row { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; justify-content: space-between; }
+  .name-title-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+  }
+  .name-title-main {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0;
+    flex: 1;
+  }
+  .name-view-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .name-display-value {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #111827;
+  }
+  .name-display-value.switch-name-display {
+    font-size: 0.95rem;
+    font-weight: 500;
+  }
+  .name-edit-toggle {
+    flex-shrink: 0;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    margin: 0;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    background: #fff;
+    color: #374151;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .name-edit-toggle:hover { background: #f9fafb; }
+  .name-edit-scope .name-edit-control { display: none; }
+  .name-edit-scope .name-save-row { display: none; }
+  .name-edit-scope.is-name-editing .name-edit-control { display: flex; }
+  .name-edit-scope.is-name-editing .name-save-row { display: flex; }
+  .name-edit-scope.is-name-editing .name-display-value { display: none; }
+  .name-edit-scope.is-name-editing .name-edit-toggle { display: none; }
+  .name-edit-scope.is-name-editing .name-view-row .name-edit-label { display: none; }
+  .name-edit-scope.is-name-editing .device-name-subtitle { display: none; }
+  .name-edit-field { display: flex; flex-direction: column; gap: 0.2rem; flex: 1; min-width: 160px; }
+  .name-edit-field-inline { flex-direction: row; align-items: center; gap: 0.5rem; }
+  .name-edit-label { font-size: 0.75rem; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.02em; }
+  .name-edit-field input[type="text"] {
+    width: 100%;
+    padding: 0.4rem 0.55rem;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 0.875rem;
+  }
+  .pump-device-group-admin .pump-device-switches-admin {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+  }
+  .pump-card-admin-nested {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 0.75rem;
+    background: #fafafa;
+  }
+  .name-save-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+    align-items: center;
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid #e5e7eb;
+  }
+  .name-propagate-label { font-size: 0.85rem; color: #4b5563; margin: 0; }
+  .name-save-row .primary { margin: 0; }
+  .names-cloud-result { font-size: 0.8rem; margin: 0.35rem 0 0; padding-left: 1.1rem; width: 100%; }
+  .names-cloud-result li.ok { color: #065f46; }
+  .names-cloud-result li.fail { color: #991b1b; }
+  .device-order-list {
+    list-style: none;
+    margin: 0.75rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    max-width: 36rem;
+  }
+  .device-order-item {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    background: #fff;
+    cursor: grab;
+  }
+  .device-order-item.is-dragging {
+    opacity: 0.55;
+    cursor: grabbing;
+  }
+  .device-order-item.is-drag-over {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+  }
+  .device-order-handle {
+    color: #9ca3af;
+    font-size: 1rem;
+    user-select: none;
+  }
+  .device-order-label { flex: 1; font-weight: 500; }
+  .device-order-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    margin-top: 0.85rem;
+  }
+  .pump-config-id { margin: 0.25rem 0 0.5rem; }
+  .grid > .pump-device-group-admin { grid-column: 1 / -1; }
+  .tl-recent-events {
+    margin-top: 0.5rem;
+    font-size: 0.72rem;
+  }
+  .tl-recent-label {
+    display: block;
+    color: #6b7280;
+    font-weight: 500;
+    margin-bottom: 0.35rem;
+  }
+  .tl-recent-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .tl-recent-list li {
+    margin: 0;
+    padding: 0;
+  }
+  .tl-event-jump {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.72rem;
+    border: 1px solid #e5e7eb;
+    background: #fff;
+    border-radius: 4px;
+    cursor: pointer;
+    color: #374151;
+    text-align: left;
+  }
+  .tl-event-jump:hover { background: #f3f4f6; border-color: #cbd5e1; }
+  .tl-event-jump.tl-event-failed { border-color: #fcd34d; background: #fffbeb; }
+  .tl-axis-row { margin-bottom: 0.15rem; border-bottom: 1px solid #e5e7eb; }
+  .tl-axis-label { font-size: 0.7rem; color: #9ca3af; font-weight: 600; text-transform: uppercase; }
+  .tl-axis-wrap { padding-top: 0.15rem; padding-bottom: 0.1rem; }
+  .tl-axis {
+    position: relative;
+    height: 28px;
+    border-bottom: 2px solid #cbd5e1;
+  }
+  .tl-axis-grid {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    transform: translateX(-0.5px);
+    pointer-events: none;
+  }
+  .tl-axis-grid-minor {
+    background: #e5e7eb;
+    opacity: 0.65;
+  }
+  .tl-axis-grid-major {
+    background: #cbd5e1;
+    opacity: 0.9;
+  }
+  .tl-axis-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
+    background: #cbd5e1;
+    pointer-events: none;
+  }
+  .tl-axis-tick {
+    position: absolute;
+    bottom: 5px;
+    transform: translateX(-50%);
+    font-size: 0.68rem;
+    color: #6b7280;
+    white-space: nowrap;
+    font-weight: 500;
+    line-height: 1.1;
+    z-index: 1;
+  }
+  .tl-axis-tick-minor {
+    font-size: 0.64rem;
+    color: #9ca3af;
+    font-weight: 400;
+  }
+  .tl-axis-tick-major {
+    font-weight: 600;
+    color: #4b5563;
+  }
+  .tl-axis-tick-sub {
+    display: block;
+    font-size: 0.58rem;
+    color: #9ca3af;
+    font-weight: 400;
+  }
+  .tl-axis-tick-end { transform: translateX(-100%); }
+  .tl-axis-now {
+    color: #1d4ed8;
+    font-weight: 700;
+    font-size: 0.75rem;
+  }
+  .tl-zoom-label {
+    font-size: 0.75rem;
+    color: #374151;
+    min-width: 2.75rem;
+    text-align: center;
+    font-weight: 600;
+  }
+  .tl-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.85rem;
+    margin-top: 0.65rem;
+    font-size: 0.75rem;
+    color: #6b7280;
+  }
+  .tl-legend span { display: inline-flex; align-items: center; gap: 0.3rem; }
+  .tl-legend-swatch {
+    display: inline-block;
+    width: 14px;
+    height: 10px;
+    border-radius: 2px;
+  }
+  .tl-legend-swatch.tl-on { background: #059669; }
+  .tl-legend-swatch.tl-off { background: #e5e7eb; }
+  .tl-legend-swatch.tl-gap {
+    background: #f3f4f6;
+    border: 1px dashed #d1d5db;
+    text-align: center;
+    line-height: 8px;
+    font-size: 0.55rem;
+  }
+  .tl-legend-marker { position: static; transform: none; width: 8px; height: 12px; }
+  .forecast-history-toggle { margin-top: 1rem; }
   .sim-toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
   .sim-status {
     margin-top: 0.65rem;
@@ -62,13 +579,222 @@
   #import-table tr.import-row-existing { opacity: 0.75; }
   #import-table .meta { font-size: 0.85rem; color: #6b7280; }
 </style>
+<script src="/static/history_timeline.js" defer></script>
 {% endblock %}
 
 {% block content %}
 <script>
 document.body.dataset.controlMode = '{{ control_mode }}';
 document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_seconds * 1000) | int }}';
+document.body.dataset.commandWaitHintMs = '{{ ((config.api.device_command_timeout_seconds + config.devices.command_verify_delay_seconds) * 1000) | int }}';
 </script>
+<div class="card" id="display-section">
+  <div class="section-header">
+    <h2>Display units</h2>
+    <button type="button" class="section-toggle" id="display-toggle" aria-expanded="false" aria-controls="display-body" title="Expand Display units">▼</button>
+  </div>
+  <div id="display-body" class="collapsible-body is-collapsed">
+    <p class="meta">Weather temperatures and precipitation on the user dashboard.</p>
+    <div class="location-form">
+      <label><input type="radio" name="display-units" value="imperial"{% if config.display.units == 'imperial' %} checked{% endif %}> Imperial (°F, in)</label>
+      <label><input type="radio" name="display-units" value="metric"{% if config.display.units == 'metric' %} checked{% endif %}> Metric (°C, mm)</label>
+      <button type="button" class="primary" id="display-units-save">Save</button>
+    </div>
+    <p class="location-status" id="display-units-status"></p>
+  </div>
+</div>
+
+<div class="card" id="notifications-section">
+  <div class="section-header">
+    <h2>Email notifications</h2>
+    <button type="button" class="section-toggle" id="notifications-toggle" aria-expanded="false" aria-controls="notifications-body" title="Expand Email notifications">▼</button>
+  </div>
+  <div id="notifications-body" class="collapsible-body is-collapsed">
+    <p class="meta">Alert email for failed pump commands. Settings save to <code>notifications:</code> in config.yaml and apply immediately — no restart.</p>
+    <div class="runtime-form">
+      <label>Administrator email (alert recipient)
+        <input type="email" id="notification-admin-email" placeholder="admin@example.com"
+               value="{{ notification_settings.admin_email }}">
+      </label>
+      <label>Public site URL (for Google OAuth redirect)
+        <input type="url" id="notification-public-base-url" placeholder="http://localhost:8080"
+               value="{{ notification_settings.public_base_url }}">
+      </label>
+    </div>
+
+    <div class="notification-test-block">
+      <h3>Send with Google</h3>
+      {% if not notification_settings.google_gmail.oauth_configured %}
+      <p class="meta">Add <code>GOOGLE_OAUTH_CLIENT_ID</code> and <code>GOOGLE_OAUTH_CLIENT_SECRET</code> to <code>.env</code>, then create an OAuth client in Google Cloud Console. Authorized redirect URI: <code>{{ notification_settings.public_base_url }}/api/auth/google/gmail/callback</code></p>
+      {% elif notification_settings.google_gmail.connected %}
+      <div class="google-connected">
+        <span>Signed in as <strong>{{ notification_settings.google_gmail.sender_email }}</strong></span>
+        <button type="button" id="google-gmail-disconnect">Disconnect Google</button>
+      </div>
+      {% else %}
+      <p class="meta">Sign in with the Google account that should send alert email (Gmail). No app password required.</p>
+      <a class="google-signin-btn" id="google-gmail-signin" href="/api/auth/google/gmail/start">
+        <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.56 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+        Sign in with Google
+      </a>
+      {% endif %}
+    </div>
+
+    <details class="smtp-advanced">
+      <summary>Advanced: SMTP fallback (optional)</summary>
+      <p class="meta">Used only when Google is not connected. Requires SMTP password in <code>.env</code>.</p>
+      <div class="runtime-form">
+        <label><input type="checkbox" id="notification-smtp-enabled"{% if notification_settings.smtp.enabled %} checked{% endif %}> SMTP enabled</label>
+        <label>SMTP host
+          <input type="text" id="notification-smtp-host" placeholder="smtp.gmail.com"
+                 value="{{ notification_settings.smtp.host }}">
+        </label>
+        <label>SMTP port
+          <input type="number" id="notification-smtp-port" min="1" max="65535"
+                 value="{{ notification_settings.smtp.port }}">
+        </label>
+        <label>SMTP username
+          <input type="text" id="notification-smtp-username" autocomplete="username"
+                 value="{{ notification_settings.smtp.username }}">
+        </label>
+        <label>From address
+          <input type="email" id="notification-smtp-from" placeholder="pumpd@example.com"
+                 value="{{ notification_settings.smtp.from_addr }}">
+        </label>
+        <label>Fallback recipients (comma-separated, optional)
+          <input type="text" id="notification-smtp-to-addrs"
+                 placeholder="ops@example.com, backup@example.com"
+                 value="{{ notification_settings.smtp.to_addrs | join(', ') }}">
+        </label>
+      </div>
+    </details>
+
+    <div class="notification-actions">
+      <button type="button" class="primary" id="notifications-save">Save settings</button>
+    </div>
+    <div class="notification-test-block">
+      <h3>Test delivery</h3>
+      <p class="meta">Sends a test message to the administrator email using Google (if connected) or SMTP fallback.</p>
+      <button type="button" class="primary" id="notifications-test">Send test email</button>
+    </div>
+    <p class="location-status notification-status" id="notifications-status"></p>
+  </div>
+</div>
+
+<div class="card" id="command-verify-section">
+  <div class="section-header">
+    <h2>Command verification</h2>
+    <button type="button" class="section-toggle" id="command-verify-toggle" aria-expanded="false" aria-controls="command-verify-body" title="Expand Command verification">▼</button>
+  </div>
+  <div id="command-verify-body" class="collapsible-body is-collapsed">
+    <p class="meta">After each turn on/off, pumpd waits then checks cloud status. If the switch did not change, the command is retried up to 3 times total, then an email is sent (see Email notifications). Applied immediately when saved.</p>
+    <div class="runtime-form">
+      <label>Verify delay (seconds)
+        <input type="number" id="command-verify-delay" min="1" max="300" step="1"
+               value="{{ command_verify_settings.command_verify_delay_seconds | int }}">
+      </label>
+      <button type="button" class="primary" id="command-verify-save">Save</button>
+    </div>
+    <p class="location-status" id="command-verify-status"></p>
+    <p class="meta">Retries: {{ command_verify_settings.command_verify_max_attempts }} (fixed).</p>
+  </div>
+</div>
+
+<div class="card" id="runtime-section">
+  <div class="section-header">
+    <h2>Max runtime</h2>
+    <button type="button" class="section-toggle" id="runtime-toggle" aria-expanded="false" aria-controls="runtime-body" title="Expand Max runtime">▼</button>
+  </div>
+  <div id="runtime-body" class="collapsible-body is-collapsed">
+    <p class="meta">Pumps turn off automatically after continuous runtime. Switch override beats device override beats system default (3 hours).</p>
+    <div class="runtime-form">
+      <label>System default (hours)
+        <input type="number" id="runtime-system-hours" min="0.1" max="24" step="0.25"
+               value="{{ (runtime_settings.system_max_runtime_minutes / 60) | round(2) }}">
+      </label>
+      <button type="button" class="primary" id="runtime-save">Save</button>
+    </div>
+    <p class="location-status" id="runtime-status"></p>
+    <table class="runtime-table">
+      <thead>
+        <tr><th>Device / switch</th><th>Override (hours)</th><th>Effective</th></tr>
+      </thead>
+      <tbody>
+        {% for g in pump_card_groups %}
+          {% if g.kind == 'group' %}
+            {% set device_key = g.device_backend ~ ':' ~ g.device_id %}
+            {% set device_row = runtime_settings.device_by_key.get(device_key) %}
+            <tr class="runtime-device-row">
+              <td><strong>{{ g.label }}</strong> <span class="meta">device</span></td>
+              <td>
+                <input type="number" class="runtime-device-input" data-device-key="{{ device_key }}"
+                       min="0.1" max="24" step="0.25" placeholder="inherit"
+                       {% if device_row and device_row.max_runtime_minutes %}value="{{ (device_row.max_runtime_minutes / 60) | round(2) }}"{% endif %}>
+              </td>
+              <td class="runtime-effective-cell">
+                {% if device_row %}{{ (device_row.effective_minutes / 60) | round(2) }}h ({{ device_row.source }}){% else %}—{% endif %}
+              </td>
+            </tr>
+            {% for p in g.pumps %}
+              {% set sw = runtime_settings.switch_by_name.get(p.name, {}) %}
+              <tr class="runtime-switch-row">
+                <td class="runtime-switch-label">{{ sw.label or (p.switch_code | replace('_', ' ') | title) }}</td>
+                <td>
+                  <input type="number" class="runtime-switch-input" data-pump-name="{{ p.name }}"
+                         min="0.1" max="24" step="0.25" placeholder="inherit"
+                         {% if sw.max_runtime_minutes %}value="{{ (sw.max_runtime_minutes / 60) | round(2) }}"{% endif %}>
+                </td>
+                <td>{{ (sw.effective_minutes / 60) | round(2) if sw.effective_minutes else '—' }}h{% if sw.source %} ({{ sw.source }}){% endif %}</td>
+              </tr>
+            {% endfor %}
+          {% else %}
+            {% for p in g.pumps %}
+              {% set sw = runtime_settings.switch_by_name.get(p.name, {}) %}
+              <tr class="runtime-switch-row">
+                <td><strong>{{ p.name | replace('_', ' ') | title }}</strong></td>
+                <td>
+                  <input type="number" class="runtime-switch-input" data-pump-name="{{ p.name }}"
+                         min="0.1" max="24" step="0.25" placeholder="inherit"
+                         {% if sw.max_runtime_minutes %}value="{{ (sw.max_runtime_minutes / 60) | round(2) }}"{% endif %}>
+                </td>
+                <td>{{ (sw.effective_minutes / 60) | round(2) if sw.effective_minutes else '—' }}h{% if sw.source %} ({{ sw.source }}){% endif %}</td>
+              </tr>
+            {% endfor %}
+          {% endif %}
+        {% else %}
+          <tr><td colspan="3">No pumps configured — import devices first.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card" id="device-order-section">
+  <div class="section-header">
+    <h2>Device display order</h2>
+    <button type="button" class="section-toggle" id="device-order-toggle" aria-expanded="false" aria-controls="device-order-body" title="Expand Device display order">▼</button>
+  </div>
+  <div id="device-order-body" class="collapsible-body is-collapsed">
+    <p class="meta">Drag devices to set the order shown on the User and Admin pump status panels. Changes apply after you save.</p>
+    {% if device_order_items %}
+    <ul id="device-order-list" class="device-order-list">
+      {% for item in device_order_items %}
+      <li class="device-order-item" draggable="true" data-device-key="{{ item.device_key }}">
+        <span class="device-order-handle" aria-hidden="true">☰</span>
+        <span class="device-order-label">{{ item.label }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    <div class="device-order-actions">
+      <button type="button" class="primary" id="device-order-save">Save display order</button>
+      <p class="location-status" id="device-order-status"></p>
+    </div>
+    {% else %}
+    <p class="meta">No devices configured — import pumps first.</p>
+    {% endif %}
+  </div>
+</div>
+
 <div class="card" id="location-section">
   <div class="section-header">
     <h2>Location</h2>
@@ -128,6 +854,16 @@ document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_
     </thead>
     <tbody id="import-table-body"></tbody>
   </table>
+  <div class="import-danger-zone">
+    <h3>Clear local devices</h3>
+    <p class="meta">
+      Remove every pump from pumpd’s local <code>config.yaml</code> and SQLite database.
+      Does <strong>not</strong> delete or unlink devices in Tuya Cloud, Meross, Smart Life, or SmartThings.
+      Event history is kept. Re-import with Sync all devices when ready.
+    </p>
+    <button type="button" class="danger-btn" id="clear-local-devices-btn">Clear all local devices</button>
+    <p class="import-status" id="clear-local-status"></p>
+  </div>
   </div>
 </div>
 
@@ -149,6 +885,40 @@ document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_
   </div>
 </div>
 
+<div class="card" id="history-section">
+  <div class="section-header">
+    <h2>History</h2>
+    <button type="button" class="section-toggle" id="history-toggle" aria-expanded="true" aria-controls="history-body" title="Collapse History">▲</button>
+  </div>
+  <div id="history-body" class="collapsible-body">
+  <p class="meta">Scroll the timeline horizontally — <strong>Now</strong> is on the right. Last 7 days shown. Use +/− to zoom and the scrollbar to pan.</p>
+  <div id="history-timeline-root" class="history-timeline-root">
+    <div class="tl-loading">Loading timeline…</div>
+  </div>
+
+  <details class="forecast-history-toggle">
+    <summary class="meta" style="cursor:pointer;">Forecast snapshots (table)</summary>
+    <table style="margin-top:0.5rem;">
+      <thead><tr><th>Polled</th><th>Provider</th><th>Hour</th><th>POP</th><th>Rain</th></tr></thead>
+      <tbody>
+        {% for f in forecast_history %}
+        <tr>
+          <td>{{ f.fetched_local }}</td>
+          <td>{{ f.provider }}</td>
+          <td>{{ f.hour_local }}</td>
+          <td>{{ f.pop_pct | round(0) }}%</td>
+          <td>{{ f.rain_mm | format_precip(config.display.units) }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5">No forecast history yet — snapshots are saved on each poll</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  <p class="meta">API: <code>GET /api/history/timeline</code> · <code>GET /api/history/forecasts</code></p>
+  </div>
+</div>
+
 <div id="status-panel" hx-get="/partials/admin/status" hx-trigger="load, every 30s, refresh from:body" hx-swap="innerHTML">
   {% include "partials/admin_status.html" %}
 </div>
@@ -156,11 +926,11 @@ document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_
 <div class="card">
   <h2>Recent events</h2>
   <table>
-    <thead><tr><th>Time</th><th>Pump</th><th>Type</th><th>Reason</th></tr></thead>
+    <thead><tr><th>Time ({{ config.timezone }})</th><th>Pump</th><th>Type</th><th>Reason</th></tr></thead>
     <tbody>
       {% for e in events %}
       <tr>
-        <td>{{ e.ts.strftime('%m-%d %H:%M:%S') }}</td>
+        <td>{{ e.ts_local }}</td>
         <td>{{ e.pump_name or '—' }}</td>
         <td>{{ e.event_type }}</td>
         <td>{{ e.reason }}</td>
@@ -170,7 +940,7 @@ document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_
       {% endfor %}
     </tbody>
   </table>
-  <p class="meta">Full log: <code>GET /api/events</code> · Health: <code>GET /health</code></p>
+  <p class="meta">Times shown in local timezone (same as History chart). Full log: <code>GET /api/events</code> · Health: <code>GET /health</code></p>
 </div>
 
 <script>
@@ -269,6 +1039,575 @@ document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_
 
 <script>
 (function() {
+  var ADMIN_SECTIONS_KEY = 'pumpdAdminSections';
+
+  function loadAdminSectionExpanded(sectionId, defaultExpanded) {
+    try {
+      var saved = JSON.parse(sessionStorage.getItem(ADMIN_SECTIONS_KEY) || '{}');
+      if (Object.prototype.hasOwnProperty.call(saved, sectionId)) {
+        return !!saved[sectionId];
+      }
+    } catch (_) {}
+    return defaultExpanded;
+  }
+
+  function saveAdminSectionExpanded(sectionId, expanded) {
+    try {
+      var saved = JSON.parse(sessionStorage.getItem(ADMIN_SECTIONS_KEY) || '{}');
+      saved[sectionId] = expanded;
+      sessionStorage.setItem(ADMIN_SECTIONS_KEY, JSON.stringify(saved));
+    } catch (_) {}
+  }
+
+  window.__pumpdInitAdminSection = function(sectionId, toggle, body, label, defaultExpanded) {
+    if (!toggle || !body) return;
+
+    function setExpanded(expanded) {
+      body.classList.toggle('is-collapsed', !expanded);
+      toggle.textContent = expanded ? '▲' : '▼';
+      toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      toggle.title = expanded ? 'Collapse ' + label : 'Expand ' + label;
+    }
+
+    setExpanded(loadAdminSectionExpanded(sectionId, defaultExpanded));
+
+    toggle.addEventListener('click', function() {
+      var nextExpanded = body.classList.contains('is-collapsed');
+      setExpanded(nextExpanded);
+      saveAdminSectionExpanded(sectionId, nextExpanded);
+    });
+  };
+})();
+</script>
+
+<script>
+(function() {
+  const toggle = document.getElementById('display-toggle');
+  const body = document.getElementById('display-body');
+  const statusEl = document.getElementById('display-units-status');
+  const saveBtn = document.getElementById('display-units-save');
+
+  if (window.__pumpdInitAdminSection) {
+    window.__pumpdInitAdminSection('display', toggle, body, 'Display units', false);
+  }
+
+  if (saveBtn) {
+    saveBtn.onclick = async function() {
+      const selected = document.querySelector('input[name="display-units"]:checked');
+      if (!selected) return;
+      statusEl.textContent = 'Saving…';
+      const resp = await fetch('/api/config/display', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ units: selected.value }),
+      });
+      if (!resp.ok) {
+        statusEl.textContent = 'Save failed';
+        return;
+      }
+      statusEl.textContent = 'Saved — refreshing dashboard';
+      if (window.htmx) htmx.trigger('#status-panel', 'load');
+    };
+  }
+})();
+</script>
+
+<script>
+(function() {
+  const toggle = document.getElementById('notifications-toggle');
+  const body = document.getElementById('notifications-body');
+  const statusEl = document.getElementById('notifications-status');
+  const saveBtn = document.getElementById('notifications-save');
+  const testBtn = document.getElementById('notifications-test');
+  const disconnectBtn = document.getElementById('google-gmail-disconnect');
+
+  if (window.__pumpdInitAdminSection) {
+    window.__pumpdInitAdminSection('notifications', toggle, body, 'Email notifications', false);
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('gmail') === 'connected') {
+    statusEl.textContent = 'Google account connected — you can send a test email now.';
+    statusEl.className = 'location-status notification-status is-ok';
+    if (window.history.replaceState) {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  } else if (params.get('gmail_error')) {
+    statusEl.textContent = 'Google sign-in failed: ' + params.get('gmail_error').replace(/\+/g, ' ');
+    statusEl.className = 'location-status notification-status is-error';
+    if (window.history.replaceState) {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }
+
+  if (disconnectBtn) {
+    disconnectBtn.onclick = async function() {
+      statusEl.textContent = 'Disconnecting…';
+      const resp = await fetch('/api/auth/google/gmail/disconnect', { method: 'POST' });
+      if (!resp.ok) {
+        statusEl.textContent = 'Disconnect failed';
+        return;
+      }
+      window.location.reload();
+    };
+  }
+
+  if (saveBtn) {
+    saveBtn.onclick = async function() {
+      const toAddrsRaw = document.getElementById('notification-smtp-to-addrs').value.trim();
+      const toAddrs = toAddrsRaw ? toAddrsRaw.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : [];
+      const port = parseInt(document.getElementById('notification-smtp-port').value, 10);
+      statusEl.textContent = 'Saving…';
+      const resp = await fetch('/api/config/notifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          admin_email: document.getElementById('notification-admin-email').value.trim(),
+          public_base_url: document.getElementById('notification-public-base-url').value.trim(),
+          smtp_enabled: document.getElementById('notification-smtp-enabled').checked,
+          smtp_host: document.getElementById('notification-smtp-host').value.trim(),
+          smtp_port: port,
+          smtp_username: document.getElementById('notification-smtp-username').value.trim(),
+          smtp_from_addr: document.getElementById('notification-smtp-from').value.trim(),
+          smtp_to_addrs: toAddrs,
+        }),
+      });
+      if (!resp.ok) {
+        statusEl.textContent = 'Save failed: ' + (await resp.text());
+        return;
+      }
+      statusEl.textContent = 'Saved — active immediately (no restart needed)';
+    };
+  }
+
+  if (testBtn) {
+    testBtn.onclick = async function() {
+      statusEl.textContent = 'Sending test email…';
+      statusEl.className = 'location-status notification-status';
+      testBtn.disabled = true;
+      try {
+        const resp = await fetch('/api/config/notifications/test', { method: 'POST' });
+        const body = await resp.json().catch(function() { return {}; });
+        if (!resp.ok) {
+          statusEl.className = 'location-status notification-status is-error';
+          statusEl.textContent = 'Test failed: ' + (body.detail || resp.statusText);
+          return;
+        }
+        statusEl.className = 'location-status notification-status ' + (body.success ? 'is-ok' : 'is-error');
+        statusEl.textContent = body.success
+          ? ('Test email sent: ' + (body.message || 'ok'))
+          : ('Test email failed: ' + (body.message || 'unknown error'));
+      } finally {
+        testBtn.disabled = false;
+      }
+    };
+  }
+})();
+</script>
+
+<script>
+(function() {
+  const toggle = document.getElementById('command-verify-toggle');
+  const body = document.getElementById('command-verify-body');
+  const statusEl = document.getElementById('command-verify-status');
+  const saveBtn = document.getElementById('command-verify-save');
+
+  if (window.__pumpdInitAdminSection) {
+    window.__pumpdInitAdminSection('command-verify', toggle, body, 'Command verification', false);
+  }
+
+  if (saveBtn) {
+    saveBtn.onclick = async function() {
+      const delay = parseFloat(document.getElementById('command-verify-delay').value);
+      if (!Number.isFinite(delay) || delay < 1) {
+        statusEl.textContent = 'Enter a valid delay (1–300 seconds)';
+        return;
+      }
+      statusEl.textContent = 'Saving…';
+      const resp = await fetch('/api/config/command-verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          command_verify_delay_seconds: delay,
+        }),
+      });
+      if (!resp.ok) {
+        statusEl.textContent = 'Save failed: ' + (await resp.text());
+        return;
+      }
+      statusEl.textContent = 'Saved — active immediately (no restart needed)';
+    };
+  }
+})();
+</script>
+
+<script>
+(function() {
+  const toggle = document.getElementById('runtime-toggle');
+  const body = document.getElementById('runtime-body');
+  const statusEl = document.getElementById('runtime-status');
+  const saveBtn = document.getElementById('runtime-save');
+
+  if (window.__pumpdInitAdminSection) {
+    window.__pumpdInitAdminSection('runtime', toggle, body, 'Max runtime', false);
+  }
+
+  function parseHoursInput(input) {
+    const raw = String(input.value || '').trim();
+    if (!raw) return null;
+    const hours = parseFloat(raw);
+    if (!Number.isFinite(hours) || hours <= 0) return null;
+    return Math.round(hours * 60);
+  }
+
+  if (saveBtn) {
+    saveBtn.onclick = async function() {
+      const systemHours = parseFloat(document.getElementById('runtime-system-hours').value);
+      if (!Number.isFinite(systemHours) || systemHours <= 0) {
+        statusEl.textContent = 'Enter a valid system default in hours';
+        return;
+      }
+      const devices = {};
+      document.querySelectorAll('.runtime-device-input').forEach(function(input) {
+        devices[input.dataset.deviceKey] = parseHoursInput(input);
+      });
+      const pumps = {};
+      document.querySelectorAll('.runtime-switch-input').forEach(function(input) {
+        pumps[input.dataset.pumpName] = parseHoursInput(input);
+      });
+      statusEl.textContent = 'Saving…';
+      const resp = await fetch('/api/config/runtime', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          system_max_runtime_minutes: Math.round(systemHours * 60),
+          devices: devices,
+          pumps: pumps,
+        }),
+      });
+      if (!resp.ok) {
+        statusEl.textContent = 'Save failed: ' + (await resp.text());
+        return;
+      }
+      statusEl.textContent = 'Saved — reload page to refresh effective values';
+    };
+  }
+})();
+</script>
+
+<script>
+(function() {
+  const toggle = document.getElementById('device-order-toggle');
+  const body = document.getElementById('device-order-body');
+  const list = document.getElementById('device-order-list');
+  const saveBtn = document.getElementById('device-order-save');
+  const statusEl = document.getElementById('device-order-status');
+
+  if (window.__pumpdInitAdminSection) {
+    window.__pumpdInitAdminSection('device-order', toggle, body, 'Device display order', false);
+  }
+
+  if (!list) return;
+
+  let dragItem = null;
+
+  list.addEventListener('dragstart', function(ev) {
+    const item = ev.target.closest('.device-order-item');
+    if (!item) return;
+    dragItem = item;
+    item.classList.add('is-dragging');
+    if (ev.dataTransfer) {
+      ev.dataTransfer.effectAllowed = 'move';
+      ev.dataTransfer.setData('text/plain', item.dataset.deviceKey || '');
+    }
+  });
+
+  list.addEventListener('dragend', function(ev) {
+    const item = ev.target.closest('.device-order-item');
+    if (item) item.classList.remove('is-dragging');
+    list.querySelectorAll('.device-order-item.is-drag-over').forEach(function(node) {
+      node.classList.remove('is-drag-over');
+    });
+    dragItem = null;
+  });
+
+  list.addEventListener('dragover', function(ev) {
+    ev.preventDefault();
+    const target = ev.target.closest('.device-order-item');
+    if (!target || target === dragItem) return;
+    list.querySelectorAll('.device-order-item.is-drag-over').forEach(function(node) {
+      if (node !== target) node.classList.remove('is-drag-over');
+    });
+    target.classList.add('is-drag-over');
+    if (!dragItem) return;
+    const rect = target.getBoundingClientRect();
+    const before = ev.clientY < rect.top + rect.height / 2;
+    if (before) list.insertBefore(dragItem, target);
+    else list.insertBefore(dragItem, target.nextSibling);
+  });
+
+  list.addEventListener('dragleave', function(ev) {
+    const item = ev.target.closest('.device-order-item');
+    if (item) item.classList.remove('is-drag-over');
+  });
+
+  if (saveBtn) {
+    saveBtn.onclick = async function() {
+      const order = Array.from(list.querySelectorAll('.device-order-item')).map(function(item) {
+        return item.dataset.deviceKey;
+      }).filter(Boolean);
+      if (statusEl) statusEl.textContent = 'Saving…';
+      const resp = await fetch('/api/config/device-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order: order }),
+      });
+      if (!resp.ok) {
+        if (statusEl) statusEl.textContent = 'Save failed: ' + (await resp.text());
+        return;
+      }
+      if (statusEl) statusEl.textContent = 'Saved — refresh the status panel to see the new order';
+      if (window.htmx) htmx.trigger('#status-panel', 'load');
+    };
+  }
+})();
+</script>
+
+<script>
+(function() {
+  var NAME_DRAFTS_KEY = 'pumpdAdminNameDrafts';
+  var NAME_EDITING_KEY = 'pumpdAdminNameEditing';
+
+  function findNameScope(node) {
+    return node.closest('.name-edit-scope');
+  }
+
+  function getEditingKeys() {
+    try {
+      return JSON.parse(sessionStorage.getItem(NAME_EDITING_KEY) || '[]');
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function setEditingKey(key, editing) {
+    if (!key) return;
+    var keys = getEditingKeys();
+    var idx = keys.indexOf(key);
+    if (editing && idx < 0) keys.push(key);
+    if (!editing && idx >= 0) keys.splice(idx, 1);
+    try {
+      sessionStorage.setItem(NAME_EDITING_KEY, JSON.stringify(keys));
+    } catch (_) {}
+  }
+
+  function setInputsEnabled(scope, enabled) {
+    if (!scope) return;
+    scope.querySelectorAll('.name-edit-control input[type="text"]').forEach(function(input) {
+      input.disabled = !enabled;
+    });
+  }
+
+  function syncDisplayValues(scope) {
+    if (!scope) return;
+    scope.querySelectorAll('.device-label-input').forEach(function(input) {
+      var display = scope.querySelector('.device-name-display');
+      if (!display) return;
+      var value = String(input.value || '').trim();
+      display.textContent = value || display.dataset.fallback || '—';
+    });
+    scope.querySelectorAll('.switch-label-input').forEach(function(input) {
+      var name = input.dataset.pumpName;
+      if (!name) return;
+      var display = scope.querySelector('.switch-name-display[data-pump-name="' + name + '"]');
+      if (!display) {
+        display = scope.querySelector('.pump-title-display');
+      }
+      if (!display) return;
+      var value = String(input.value || '').trim();
+      display.textContent = value || display.dataset.fallback || '—';
+    });
+  }
+
+  function enterNameEditMode(scope) {
+    if (!scope) return;
+    var key = scope.dataset.nameEditKey;
+    scope.classList.add('is-name-editing');
+    setInputsEnabled(scope, true);
+    setEditingKey(key, true);
+    var first = scope.querySelector('.name-edit-control input[type="text"]:not([disabled])');
+    if (first) first.focus();
+  }
+
+  function exitNameEditMode(scope) {
+    if (!scope) return;
+    var key = scope.dataset.nameEditKey;
+    syncDisplayValues(scope);
+    scope.classList.remove('is-name-editing');
+    setInputsEnabled(scope, false);
+    setEditingKey(key, false);
+  }
+
+  function captureNameDrafts(root) {
+    if (!root) return;
+    var drafts = {};
+    root.querySelectorAll('.name-edit-scope.is-name-editing').forEach(function(scope) {
+      scope.querySelectorAll('.device-label-input').forEach(function(input) {
+        var key = input.dataset.deviceKey;
+        if (key) drafts['d:' + key] = input.value;
+      });
+      scope.querySelectorAll('.switch-label-input').forEach(function(input) {
+        var name = input.dataset.pumpName;
+        if (name) drafts['s:' + name] = input.value;
+      });
+    });
+    try {
+      sessionStorage.setItem(NAME_DRAFTS_KEY, JSON.stringify(drafts));
+    } catch (_) {}
+  }
+
+  function applyNameDrafts(root) {
+    if (!root) return;
+    var drafts = {};
+    try {
+      drafts = JSON.parse(sessionStorage.getItem(NAME_DRAFTS_KEY) || '{}');
+    } catch (_) {}
+    root.querySelectorAll('.device-label-input').forEach(function(input) {
+      var key = input.dataset.deviceKey;
+      if (key && Object.prototype.hasOwnProperty.call(drafts, 'd:' + key)) {
+        input.value = drafts['d:' + key];
+      }
+    });
+    root.querySelectorAll('.switch-label-input').forEach(function(input) {
+      var name = input.dataset.pumpName;
+      if (name && Object.prototype.hasOwnProperty.call(drafts, 's:' + name)) {
+        input.value = drafts['s:' + name];
+      }
+    });
+  }
+
+  function applyNameEditingState(root) {
+    if (!root) return;
+    var editing = getEditingKeys();
+    root.querySelectorAll('.name-edit-scope').forEach(function(scope) {
+      var key = scope.dataset.nameEditKey;
+      if (key && editing.indexOf(key) >= 0) {
+        scope.classList.add('is-name-editing');
+        setInputsEnabled(scope, true);
+      } else {
+        scope.classList.remove('is-name-editing');
+        setInputsEnabled(scope, false);
+      }
+    });
+  }
+
+  function initNameEditScopes(root) {
+    if (!root) root = document.getElementById('status-panel');
+    if (!root) return;
+    applyNameEditingState(root);
+    applyNameDrafts(root);
+    root.querySelectorAll('.name-edit-scope:not(.is-name-editing)').forEach(syncDisplayValues);
+  }
+
+  document.body.addEventListener('htmx:beforeSwap', function(evt) {
+    if (!evt.detail.target || evt.detail.target.id !== 'status-panel') return;
+    captureNameDrafts(evt.detail.target);
+  });
+
+  document.body.addEventListener('htmx:afterSettle', function() {
+    initNameEditScopes(document.getElementById('status-panel'));
+  });
+
+  document.body.addEventListener('click', function(ev) {
+    var editBtn = ev.target.closest('.name-edit-toggle');
+    if (editBtn) {
+      var scope = findNameScope(editBtn);
+      if (scope) enterNameEditMode(scope);
+      return;
+    }
+
+    var saveBtn = ev.target.closest('.save-device-names-btn');
+    if (!saveBtn) return;
+    ev.preventDefault();
+    handleSaveNames(saveBtn);
+  });
+
+  async function handleSaveNames(btn) {
+    var scope = findNameScope(btn);
+    if (!scope) return;
+
+    var statusEl = scope.querySelector('.name-save-status');
+    var cloudEl = scope.querySelector('.names-cloud-result');
+    var propagateEl = scope.querySelector('.propagate-cloud-toggle');
+    var editKey = scope.dataset.nameEditKey;
+
+    var devices = {};
+    scope.querySelectorAll('.device-label-input').forEach(function(input) {
+      var key = input.dataset.deviceKey;
+      if (key) devices[key] = String(input.value || '').trim();
+    });
+    var switches = {};
+    scope.querySelectorAll('.switch-label-input').forEach(function(input) {
+      var name = input.dataset.pumpName;
+      if (name) switches[name] = String(input.value || '').trim();
+    });
+
+    if (statusEl) statusEl.textContent = 'Saving…';
+    if (cloudEl) {
+      cloudEl.hidden = true;
+      cloudEl.innerHTML = '';
+    }
+
+    var resp = await fetch('/api/config/names', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        devices: devices,
+        switches: switches,
+        propagate_cloud: propagateEl ? propagateEl.checked : true,
+      }),
+    });
+
+    if (!resp.ok) {
+      if (statusEl) statusEl.textContent = 'Save failed';
+      return;
+    }
+
+    var data = await resp.json();
+    if (statusEl) statusEl.textContent = 'Saved';
+    try {
+      sessionStorage.removeItem(NAME_DRAFTS_KEY);
+      setEditingKey(editKey, false);
+    } catch (_) {}
+
+    exitNameEditMode(scope);
+
+    if (cloudEl && Array.isArray(data.cloud) && data.cloud.length) {
+      cloudEl.hidden = false;
+      data.cloud.forEach(function(item) {
+        var li = document.createElement('li');
+        li.className = item.success ? 'ok' : 'fail';
+        var target = item.kind === 'device'
+          ? ((item.device_backend || '') + ' device')
+          : ('switch ' + (item.pump_name || ''));
+        li.textContent = target + ': ' + (item.message || (item.success ? 'updated' : 'failed'));
+        cloudEl.appendChild(li);
+      });
+    }
+
+    if (window.htmx) htmx.trigger('#status-panel', 'load');
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function() { initNameEditScopes(); });
+  } else {
+    initNameEditScopes();
+  }
+})();
+</script>
+
+<script>
+(function() {
   const toggle = document.getElementById('location-toggle');
   const body = document.getElementById('location-body');
   if (!toggle || !body) return;
@@ -303,6 +1642,46 @@ document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_
     toggle.addEventListener('click', function() {
       setExpanded(body.classList.contains('is-collapsed'));
     });
+  }
+})();
+</script>
+
+<script>
+(function() {
+  const toggle = document.getElementById('history-toggle');
+  const body = document.getElementById('history-body');
+  if (!toggle || !body) return;
+
+  function setExpanded(expanded) {
+    body.classList.toggle('is-collapsed', !expanded);
+    toggle.textContent = expanded ? '▲' : '▼';
+    toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    toggle.title = expanded ? 'Collapse History' : 'Expand History';
+    if (expanded && window.initHistoryTimeline) {
+      window.initHistoryTimeline(document.getElementById('history-timeline-root'));
+    }
+  }
+
+  toggle.addEventListener('click', function() {
+    setExpanded(body.classList.contains('is-collapsed'));
+  });
+
+  function startTimeline() {
+    const root = document.getElementById('history-timeline-root');
+    if (!root) return;
+    if (window.initHistoryTimeline) {
+      window.initHistoryTimeline(root);
+    } else {
+      setTimeout(startTimeline, 50);
+    }
+  }
+
+  if (!body.classList.contains('is-collapsed')) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', startTimeline);
+    } else {
+      startTimeline();
+    }
   }
 })();
 </script>
@@ -537,6 +1916,44 @@ document.body.dataset.commandTimeoutMs = '{{ (config.api.device_command_timeout_
     else importStatus.textContent = 'Could not load credential status';
   }
   loadSetup();
+
+  const clearLocalBtn = document.getElementById('clear-local-devices-btn');
+  const clearLocalStatus = document.getElementById('clear-local-status');
+  if (clearLocalBtn) {
+    clearLocalBtn.onclick = async function() {
+      const confirmed = confirm(
+        'Remove ALL pumps from pumpd locally?\n\n' +
+        'This clears config.yaml and the local database. ' +
+        'Cloud devices (Tuya, Meross, SmartThings) are NOT deleted.\n\n' +
+        'Continue?'
+      );
+      if (!confirmed) return;
+
+      clearLocalBtn.disabled = true;
+      if (clearLocalStatus) clearLocalStatus.textContent = 'Clearing local devices…';
+      try {
+        const resp = await fetch('/api/devices/clear-local', { method: 'POST' });
+        if (!resp.ok) {
+          if (clearLocalStatus) clearLocalStatus.textContent = 'Clear failed: ' + (await resp.text());
+          return;
+        }
+        const data = await resp.json();
+        discovered = [];
+        importTable.style.display = 'none';
+        importBody.innerHTML = '';
+        updateImportBtnState();
+        if (clearLocalStatus) clearLocalStatus.textContent = data.message || 'Local devices cleared.';
+        if (importStatus) {
+          importStatus.textContent = 'No pumps configured — use Sync all devices to re-import.';
+        }
+        if (window.refreshStatusPanel) window.refreshStatusPanel();
+      } catch (_) {
+        if (clearLocalStatus) clearLocalStatus.textContent = 'Clear failed.';
+      } finally {
+        clearLocalBtn.disabled = false;
+      }
+    };
+  }
 
   function renderDevices(devices) {
     discovered = devices;

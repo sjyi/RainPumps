@@ -1,0 +1,50 @@
+<div class="manual-control-scope" data-pump-name="{{ p.name }}">
+  {% if p.mode == 'manual_on' or p.mode == 'manual_off' %}
+  <p class="meta manual-expires">
+    Manual
+    {% if p.manual_revert_kind == 'until_auto' %}
+    until next automatic control
+    {% else %}
+    until {{ p.manual_revert_at_local or '—' }}
+    {% endif %}
+  </p>
+  {% endif %}
+  <fieldset class="manual-control manual-control-panel" hidden>
+    <legend class="manual-control-legend">Manual time limit</legend>
+    <div class="manual-duration-row">
+      <label>
+        Hours
+        <input type="number" class="manual-hours" min="0" max="99" value="0">
+      </label>
+      <label>
+        Minutes
+        <input type="number" class="manual-minutes" min="0" max="59"
+               value="{{ p.manual_default_minutes }}">
+      </label>
+    </div>
+    <div class="manual-limit-row">
+      <label class="manual-limit-option">
+        <input type="radio" class="manual-limit-duration" name="manual-limit-{{ p.name }}" checked>
+        For duration above
+      </label>
+      <label class="manual-limit-option">
+        <input type="radio" class="manual-limit-auto" name="manual-limit-{{ p.name }}">
+        Until next automatic control
+      </label>
+    </div>
+    <p class="meta manual-control-hint">
+      Adjust the time limit if needed, then click Update. Manual ON/OFF runs immediately using these settings.
+    </p>
+    <div class="manual-control-actions">
+      <button type="button"
+              class="mode-btn manual-apply-btn"
+              data-mode-action="Update manual duration"
+              hx-post="/api/pumps/{{ p.name }}/mode"
+              hx-swap="none"
+              hx-on::after-request="if(event.detail.successful) { window.closeManualControlPanel(this); htmx.trigger('#status-panel', 'load'); }">
+        Update duration
+      </button>
+      <button type="button" class="manual-cancel-btn">Close</button>
+    </div>
+  </fieldset>
+</div>

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import AppConfig
 from app.engine import RainState
 from app.models import HardwareHealthRow
+from app.time_format import format_local
 
 logger = logging.getLogger(__name__)
 
@@ -134,13 +135,18 @@ class HardwareMonitor:
                 session.expunge(row)
             return rows
 
-    def status_summary(self) -> list[dict[str, Any]]:
+    def status_summary(self, *, timezone: str = "UTC") -> list[dict[str, Any]]:
         return [
             {
                 "component_id": r.component_id,
                 "component_type": r.component_type,
                 "status": r.status,
                 "last_ok_at": r.last_ok_at.isoformat() if r.last_ok_at else None,
+                "last_ok_at_local": (
+                    format_local(r.last_ok_at, timezone, "%Y-%m-%d %H:%M")
+                    if r.last_ok_at
+                    else None
+                ),
                 "last_error": r.last_error,
                 "consecutive_failures": r.consecutive_failures,
             }

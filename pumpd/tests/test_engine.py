@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from dataclasses import replace
+
 from app.config import DutyCycleConfig, RulesConfig
 from app.engine import (
     HourlyForecast,
@@ -14,6 +16,7 @@ from app.engine import (
     forecast_is_raining,
     should_preemptive_start,
 )
+from app.manual_control import ManualContext, ManualEnvSnapshot
 
 NOW = datetime(2026, 8, 3, 14, 0, tzinfo=UTC)
 
@@ -26,7 +29,7 @@ def _rules(**kwargs) -> RulesConfig:
         lookahead_hours=2,
         post_rain_drain_minutes=30,
         sensor_dry_minutes=10,
-        manual_revert_hours=4,
+        manual_revert_minutes=5,
         duty_cycle=DutyCycleConfig(enabled=False, on_minutes=10, off_minutes=20),
     )
     return base.model_copy(update=kwargs)
@@ -73,7 +76,7 @@ def test_preemptive_start_triggers_pump() -> None:
         pumps=[_pump()],
         rules=_rules(),
         safety=SafetyFlags(),
-        max_runtime_minutes=60,
+        max_runtime_by_pump={"north_pump": 60},
     )
     assert any(c.action == "turn_on" for c in result.commands)
 
@@ -89,7 +92,7 @@ def test_post_rain_drain_runs_continuously() -> None:
         pumps=[pump],
         rules=_rules(),
         safety=SafetyFlags(),
-        max_runtime_minutes=60,
+        max_runtime_by_pump={"north_pump": 60},
     )
     assert result.pumps[0].device_on is True
     assert not any(c.action == "turn_off" for c in result.commands)
@@ -109,7 +112,7 @@ def test_post_rain_drain_completes() -> None:
         pumps=[pump],
         rules=_rules(),
         safety=SafetyFlags(),
-        max_runtime_minutes=60,
+        max_runtime_by_pump={"north_pump": 60},
     )
     assert any(c.action == "turn_off" for c in result.commands)
 
@@ -130,7 +133,7 @@ def test_duty_cycle_not_applied_during_post_rain_drain() -> None:
         pumps=[pump],
         rules=rules,
         safety=SafetyFlags(),
-        max_runtime_minutes=60,
+        max_runtime_by_pump={"north_pump": 60},
     )
     assert result.pumps[0].device_on is True
 
@@ -145,7 +148,7 @@ def test_sensor_overrides_forecast_for_raining() -> None:
         pumps=[pump],
         rules=_rules(),
         safety=SafetyFlags(),
-        max_runtime_minutes=60,
+        max_runtime_by_pump={"north_pump": 60},
     )
     assert any(c.action == "turn_on" for c in result.commands)
 
@@ -160,7 +163,7 @@ def test_stale_forecast_watchdog_turns_off() -> None:
         pumps=[pump],
         rules=_rules(),
         safety=SafetyFlags(stale_forecast=True),
-        max_runtime_minutes=60,
+        max_runtime_by_pump={"north_pump": 60},
     )
     assert any(c.action == "turn_off" for c in result.commands)
 
@@ -175,7 +178,7 @@ def test_watchdog_mqtt_exception_keeps_running() -> None:
         pumps=[pump],
         rules=_rules(),
         safety=SafetyFlags(stale_forecast=True, mqtt_stale_override=True),
-        max_runtime_minutes=60,
+        max_runtime_by_pump={"north_pump": 60},
     )
     assert not any(c.action == "turn_off" for c in result.commands)
 
@@ -190,11 +193,37 @@ def test_max_runtime_cutoff() -> None:
         pumps=[pump],
         rules=_rules(),
         safety=SafetyFlags(),
-        max_runtime_minutes=60,
+        max_runtime_by_pump={"north_pump": 60},
         min_cooldown_minutes=15,
     )
     assert any(c.action == "turn_off" for c in result.commands)
     assert result.pumps[0].cooldown_until is not None
+
+
+def test_per_pump_max_runtime_limit() -> None:
+    rain = RainState(True, 1.0, 0.9, "mqtt", NOW)
+    pump = _pump(name="slow_pump", phase="running", device_on=True, runtime_continuous_min=100)
+    result = evaluate(
+        now=NOW,
+        rain=rain,
+        forecast_window=[],
+        pumps=[pump],
+        rules=_rules(),
+        safety=SafetyFlags(),
+        max_runtime_by_pump={"slow_pump": 120},
+    )
+    assert not any(c.action == "turn_off" for c in result.commands)
+    result = evaluate(
+        now=NOW,
+        rain=rain,
+        forecast_window=[],
+        pumps=[replace(pump, runtime_continuous_min=120)],
+        rules=_rules(),
+        safety=SafetyFlags(),
+        max_runtime_by_pump={"slow_pump": 120},
+    )
+    assert any(c.action == "turn_off" for c in result.commands)
+    assert "max runtime 120min exceeded" in result.commands[0].reason
 
 
 def test_manual_on_overrides_automation() -> None:
@@ -207,7 +236,7 @@ def test_manual_on_overrides_automation() -> None:
         pumps=[pump],
         rules=_rules(),
         safety=SafetyFlags(),
-        max_runtime_minutes=60,
+        max_runtime_by_pump={"north_pump": 60},
     )
     assert any(c.action == "turn_on" for c in result.commands)
 
@@ -223,7 +252,7 @@ def test_stale_forecast_overrides_manual_on_without_approval() -> None:
         pumps=[pump],
         rules=_rules(),
         safety=SafetyFlags(stale_forecast=True),
-        max_runtime_minutes=60,
+        max_runtime_by_pump={"north_pump": 60},
     )
     assert any(c.action == "turn_off" for c in result.commands)
 
@@ -238,7 +267,7 @@ def test_manual_on_with_safety_override_bypasses_stale_forecast() -> None:
         pumps=[pump],
         rules=_rules(),
         safety=SafetyFlags(stale_forecast=True),
-        max_runtime_minutes=60,
+        max_runtime_by_pump={"north_pump": 60},
     )
     assert not any(c.action == "turn_off" for c in result.commands)
 
@@ -255,7 +284,7 @@ def test_mqtt_dry_overrides_forecast_rain() -> None:
         pumps=[pump],
         rules=_rules(),
         safety=SafetyFlags(),
-        max_runtime_minutes=60,
+        max_runtime_by_pump={"north_pump": 60},
         mqtt_min_confidence=0.8,
     )
     assert result.pumps[0].phase == "post_rain_drain" or any(
@@ -272,7 +301,7 @@ def test_mqtt_starts_from_idle() -> None:
         pumps=[_pump()],
         rules=_rules(),
         safety=SafetyFlags(),
-        max_runtime_minutes=60,
+        max_runtime_by_pump={"north_pump": 60},
         mqtt_min_confidence=0.8,
     )
     assert any(c.action == "turn_on" for c in result.commands)
@@ -294,7 +323,7 @@ def test_sensor_dry_stops_post_rain_drain() -> None:
         pumps=[pump],
         rules=_rules(),
         safety=SafetyFlags(),
-        max_runtime_minutes=60,
+        max_runtime_by_pump={"north_pump": 60},
         mqtt_min_confidence=0.8,
     )
     assert any(c.action == "turn_off" for c in result.commands)
@@ -311,17 +340,23 @@ def test_manual_off_overrides_automation() -> None:
         pumps=[pump],
         rules=_rules(),
         safety=SafetyFlags(),
-        max_runtime_minutes=60,
+        max_runtime_by_pump={"north_pump": 60},
     )
     assert any(c.action == "turn_off" for c in result.commands)
 
 
 def test_manual_revert_to_auto() -> None:
     rain = RainState(False, 0, 0.7, "forecast", NOW)
+    ctx = ManualContext(
+        device_on_before=True,
+        revert_kind="duration",
+        env=ManualEnvSnapshot(is_raining=False, preempt=False, water_present=None),
+    )
     pump = _pump(
         mode="manual_on",
         device_on=True,
         manual_revert_at=NOW - timedelta(minutes=1),
+        manual_context=ctx,
     )
     result = evaluate(
         now=NOW,
@@ -330,7 +365,7 @@ def test_manual_revert_to_auto() -> None:
         pumps=[pump],
         rules=_rules(),
         safety=SafetyFlags(),
-        max_runtime_minutes=60,
+        max_runtime_by_pump={"north_pump": 60},
     )
     assert result.pumps[0].mode == "auto"
 
@@ -353,7 +388,7 @@ def test_idle_starts_when_raining_now_without_preempt() -> None:
         pumps=[_pump()],
         rules=_rules(),
         safety=SafetyFlags(),
-        max_runtime_minutes=60,
+        max_runtime_by_pump={"north_pump": 60},
     )
     assert any(c.action == "turn_on" for c in result.commands)
     assert result.pumps[0].phase == "running"
@@ -370,7 +405,7 @@ def test_cooldown_blocks_auto_start() -> None:
         pumps=[pump],
         rules=_rules(),
         safety=SafetyFlags(),
-        max_runtime_minutes=60,
+        max_runtime_by_pump={"north_pump": 60},
     )
     assert not any(c.action == "turn_on" for c in result.commands)
 
@@ -388,7 +423,7 @@ def test_multi_pump_independent() -> None:
         pumps=pumps,
         rules=_rules(),
         safety=SafetyFlags(),
-        max_runtime_minutes=60,
+        max_runtime_by_pump={"north_pump": 60},
     )
     p2_commands = [c for c in result.commands if c.pump_name == "p2"]
     assert p2_commands == []

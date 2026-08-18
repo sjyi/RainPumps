@@ -1,0 +1,69 @@
+{# Admin multi-outlet device — include with: g #}
+<div class="card pump-device-group pump-device-group-admin name-edit-scope"
+     id="pump-device-admin-{{ g.device_backend }}-{{ g.device_id[:12] }}"
+     data-device-key="{{ g.device_key }}"
+     data-device-backend="{{ g.device_backend }}"
+     data-device-id="{{ g.device_id }}"
+     data-name-edit-key="{{ g.device_key }}">
+  <div class="pump-device-group-header pump-device-group-header-admin">
+    <div class="name-title-row">
+      <div class="name-title-main">
+        <span class="name-display-value device-name-display"
+              data-fallback="{{ g.label }}">{{ g.label }}</span>
+        <button type="button" class="name-edit-toggle" title="Edit device and switch names" aria-label="Edit names">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 20h9"/>
+            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+          </svg>
+        </button>
+      </div>
+      <div class="pump-device-group-meta">
+        <span class="badge {{ g.online_status }}">{{ g.online_status | replace('_', ' ') | title }}</span>
+        <span class="meta">{{ g.device_backend | title }} · {{ g.switch_count }} outlets</span>
+      </div>
+    </div>
+    <label class="name-edit-field name-edit-control">
+      <span class="name-edit-label">Device name</span>
+      <input type="text" class="device-label-input" data-device-key="{{ g.device_key }}"
+             placeholder="Device display name" value="{{ g.label }}" disabled>
+    </label>
+  </div>
+  {% include "partials/manual_control_group.html" %}
+  <div class="pump-device-quick-actions" role="group" aria-label="All outlets on {{ g.label }}">
+    <button type="button"
+            class="mode-btn mode-on mode-btn-compact"
+            data-mode-action="All Manual ON"
+            data-manual-mode="manual_on"
+            hx-post="/api/devices/mode"
+            hx-swap="none"
+            hx-on::after-request="if(event.detail.successful) htmx.trigger('#status-panel', 'load')">
+      Manual ON all
+    </button>
+    <button type="button"
+            class="mode-btn mode-off mode-btn-compact"
+            data-mode-action="All Manual OFF"
+            data-manual-mode="manual_off"
+            hx-post="/api/devices/mode"
+            hx-swap="none"
+            hx-on::after-request="if(event.detail.successful) htmx.trigger('#status-panel', 'load')">
+      Manual OFF all
+    </button>
+  </div>
+  <p class="pump-device-command-status" hidden aria-live="polite"></p>
+  <div class="pump-device-switches pump-device-switches-admin">
+    {% for p in g.pumps %}
+    {% with admin=true, nested=true %}
+    {% include "partials/pump_card.html" %}
+    {% endwith %}
+    {% endfor %}
+  </div>
+  <div class="name-save-row name-edit-control">
+    <label class="name-propagate-label">
+      <input type="checkbox" class="propagate-cloud-toggle" checked>
+      Push names to cloud
+    </label>
+    <button type="button" class="primary save-device-names-btn">Save names</button>
+    <p class="name-save-status meta" aria-live="polite"></p>
+    <ul class="names-cloud-result" hidden></ul>
+  </div>
+</div>

@@ -232,6 +232,31 @@ def test_expand_meross_channel_devices() -> None:
     assert expanded[1].meross_switch_code == "switch_2"
 
 
+def test_expand_meross_mss620_skips_ghost_third_outlet() -> None:
+    from app.device_import import expand_meross_channel_devices
+
+    base = DiscoveredDevice(
+        source="meross_cloud",
+        label="1st fl office",
+        meross_device_uuid="uuid-office",
+        raw={
+            "device_type": "mss620",
+            "channels": [
+                {},
+                {"type": "Switch", "devName": "Rm 303"},
+                {"type": "Switch", "devName": "Switch 2"},
+            ],
+        },
+    )
+    expanded = expand_meross_channel_devices([base])
+    assert len(expanded) == 2
+    assert [p.meross_channel for p in expanded] == [1, 2]
+    assert expanded[0].meross_switch_code == "switch_1"
+    assert expanded[1].meross_switch_code == "switch_2"
+    assert "Rm 303" in expanded[0].label
+    assert "Switch 2" in expanded[1].label
+
+
 def test_build_auto_import_pumps_adds_and_updates() -> None:
     from app.config import MerossConfig, TuyaConfig
     from app.device_import import build_auto_import_pumps

@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from app.config import PumpMode, PumpPhaseName, RulesConfig
+from app.manual_control import ManualContext, ManualExpiryKind, check_manual_expiry
 
 Phase = PumpPhaseName
 Mode = PumpMode
@@ -40,6 +41,7 @@ class PumpPhase:
     runtime_continuous_min: int
     cooldown_until: datetime | None
     manual_revert_at: datetime | None
+    manual_context: ManualContext | None = None
     post_rain_drain_started_at: datetime | None = None
     sensor_dry_since: datetime | None = None
     duty_cycle_started_at: datetime | None = None
@@ -133,14 +135,14 @@ def _in_cooldown(pump: PumpPhase, now: datetime) -> bool:
     return pump.cooldown_until is not None and now < pump.cooldown_until
 
 
-def _apply_manual_revert(pump: PumpPhase, now: datetime) -> PumpPhase:
-    if (
-        pump.mode in ("manual_on", "manual_off")
-        and pump.manual_revert_at
-        and now >= pump.manual_revert_at
-    ):
-        return replace(pump, mode="auto", manual_revert_at=None, safety_override_approved=False)
-    return pump
+def _clear_manual(pump: PumpPhase) -> PumpPhase:
+    return replace(
+        pump,
+        mode="auto",
+        manual_revert_at=None,
+        manual_context=None,
+        safety_override_approved=False,
+    )
 
 
 def _duty_should_be_on(pump: PumpPhase, now: datetime, rules: RulesConfig) -> bool:
@@ -187,7 +189,7 @@ def evaluate(
     pumps: list[PumpPhase],
     rules: RulesConfig,
     safety: SafetyFlags,
-    max_runtime_minutes: int,
+    max_runtime_by_pump: dict[str, int],
     min_cooldown_minutes: int = 15,
     mqtt_min_confidence: float = 0.8,
 ) -> EvaluateResult:
@@ -211,20 +213,70 @@ def evaluate(
     mqtt_authoritative = rain.source == "mqtt" and rain.confidence >= mqtt_min_confidence
 
     for pump in pumps:
-        p = _apply_manual_revert(pump, now)
-        if not p.enabled:
-            updated.append(p)
-            continue
+        p = pump
+        manual_expiry: ManualExpiryKind | None = check_manual_expiry(
+            mode=p.mode,
+            manual_revert_at=p.manual_revert_at,
+            manual_context=p.manual_context,
+            now=now,
+            is_raining_now=is_raining_now,
+            preempt_now=preempt,
+            water_present=rain.water_present,
+        )
 
         want_on = False
         reason = "default off"
         new_phase: Phase | None = None
         notify = False
+        manual_timeout_restore: bool | None = None
+
+        if manual_expiry == "timeout":
+            restore = (
+                p.manual_context.device_on_before
+                if p.manual_context is not None
+                else p.device_on
+            )
+            p = _clear_manual(p)
+            manual_timeout_restore = restore
+            want_on = restore
+            reason = "manual expired; restored prior switch state"
+        elif manual_expiry == "env_preempt":
+            p = _clear_manual(p)
+
+        if not p.enabled:
+            updated.append(p)
+            continue
+
+        if manual_timeout_restore is not None:
+            if new_phase:
+                p = replace(p, phase=new_phase)
+            action: Literal["turn_on", "turn_off", "no_op"] = "no_op"
+            if want_on and not p.device_on:
+                action = "turn_on"
+            elif not want_on and p.device_on:
+                action = "turn_off"
+            if action != "no_op":
+                commands.append(
+                    PumpCommand(
+                        pump_name=p.name,
+                        action=action,
+                        reason=reason,
+                        new_phase=p.phase,
+                        notify=notify,
+                    )
+                )
+                p = replace(p, device_on=want_on)
+            updated.append(p)
+            continue
 
         manual_overrides_safety = (
             p.mode in ("manual_on", "manual_off") and p.safety_override_approved
         )
-        trip, trip_reason = _safety_trip(p, safety, max_runtime_minutes)
+        trip, trip_reason = _safety_trip(
+            p,
+            safety,
+            max_runtime_by_pump.get(p.name, max(max_runtime_by_pump.values(), default=180)),
+        )
 
         # 1. Safety hard-stops (manual may override with approval)
         if trip and not manual_overrides_safety:

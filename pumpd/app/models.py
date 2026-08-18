@@ -24,6 +24,19 @@ class ForecastRow(Base):
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class ForecastHistoryRow(Base):
+    """Append-only forecast snapshots (one row per provider/hour per poll)."""
+
+    __tablename__ = "forecast_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    provider: Mapped[str] = mapped_column(String(32), index=True)
+    hour_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    pop_pct: Mapped[float] = mapped_column(Float)
+    rain_mm: Mapped[float] = mapped_column(Float)
+
+
 class ProviderHealthRow(Base):
     __tablename__ = "provider_health"
 
@@ -46,6 +59,7 @@ class PumpStateRow(Base):
     manual_revert_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    manual_context_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     runtime_today_min: Mapped[int] = mapped_column(Integer, default=0)
     post_rain_drain_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

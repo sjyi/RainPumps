@@ -58,6 +58,14 @@ def group_turn_on_commands(
     return singles, dict(by_device)
 
 
+def sort_pumps_by_switch(pumps: list[PumpConfig]) -> list[PumpConfig]:
+    """Order pump configs by outlet (switch_1 before switch_2, …)."""
+    return sorted(
+        pumps,
+        key=lambda p: (switch_index(pump_switch_code(p)), p.name),
+    )
+
+
 def sort_commands_by_switch(
     commands: list[PumpCommand],
     pumps_by_name: dict[str, PumpConfig],

@@ -21,6 +21,7 @@ class CommandResult:
     timed_out: bool = False
     retried: bool = False
     status_before_retry: str = ""
+    verify_attempts: int = 0
 
 
 class PumpDevice(ABC):

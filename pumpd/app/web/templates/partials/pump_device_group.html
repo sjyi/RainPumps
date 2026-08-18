@@ -1,0 +1,52 @@
+{# Multi-outlet device — include with: g #}
+<div class="card pump-device-group pump-device-collapsible"
+     id="pump-device-{{ g.device_backend }}-{{ g.device_id[:12] }}"
+     data-device-key="{{ g.device_backend }}:{{ g.device_id }}"
+     data-device-backend="{{ g.device_backend }}"
+     data-device-id="{{ g.device_id }}">
+  <div class="pump-device-group-header">
+    <button type="button"
+            class="pump-device-toggle"
+            aria-expanded="false"
+            aria-controls="pump-device-body-{{ g.device_backend }}-{{ g.device_id[:12] }}">
+      <span class="pump-card-arrow" aria-hidden="true">▶</span>
+      <span class="pump-device-group-title">{{ g.label }}</span>
+    </button>
+    <div class="pump-device-group-meta">
+      <span class="badge {{ g.online_status }}">{{ g.online_status | replace('_', ' ') | title }}</span>
+      <span class="meta">{{ g.switch_count }} outlets</span>
+    </div>
+  </div>
+  {% include "partials/manual_control_group.html" %}
+  <div class="pump-device-quick-actions" role="group" aria-label="All outlets on {{ g.label }}">
+    <button type="button"
+            class="mode-btn mode-on mode-btn-compact"
+            data-mode-action="All Manual ON"
+            title="Turn on every outlet on this device"
+            data-manual-mode="manual_on"
+            hx-post="/api/devices/mode"
+            hx-swap="none"
+            hx-on::after-request="if(event.detail.successful) htmx.trigger('#status-panel', 'load')">
+      Manual ON
+    </button>
+    <button type="button"
+            class="mode-btn mode-off mode-btn-compact"
+            data-mode-action="All Manual OFF"
+            title="Turn off every outlet on this device"
+            data-manual-mode="manual_off"
+            hx-post="/api/devices/mode"
+            hx-swap="none"
+            hx-on::after-request="if(event.detail.successful) htmx.trigger('#status-panel', 'load')">
+      Manual OFF
+    </button>
+  </div>
+  <p class="pump-device-command-status" hidden aria-live="polite"></p>
+  <div class="pump-device-switches"
+       id="pump-device-body-{{ g.device_backend }}-{{ g.device_id[:12] }}">
+    {% for p in g.pumps %}
+    {% with nested=true %}
+    {% include "partials/pump_card.html" %}
+    {% endwith %}
+    {% endfor %}
+  </div>
+</div>

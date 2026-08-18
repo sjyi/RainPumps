@@ -33,6 +33,8 @@ def _migrate_schema(engine: Engine) -> None:
             alters.append(
                 "ALTER TABLE pump_state ADD COLUMN safety_override_approved BOOLEAN DEFAULT 0"
             )
+        if "manual_context_json" not in columns:
+            alters.append("ALTER TABLE pump_state ADD COLUMN manual_context_json TEXT")
         if alters:
             with engine.begin() as conn:
                 for stmt in alters:

@@ -2,7 +2,7 @@ services:
   pumpd:
     build: .
     ports:
-      - "8081:8080"
+      - "8080:8080"
     volumes:
       - pumpd-data:/app/data
       - ./config.yaml:/app/config.yaml

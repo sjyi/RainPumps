@@ -55,8 +55,11 @@ See `config.example.yaml`. Key settings:
 | `rules.precip_probability_threshold` | 70 | % — any hour in lookahead must exceed |
 | `rules.precip_amount_threshold_mm` | 2.0 | Sum of hourly rain mm in lookahead |
 | `rules.lookahead_hours` | 2 | Pre-emptive start window |
-| `safety.max_continuous_runtime_minutes` | 60 | Dry-run protection |
+| `safety.max_continuous_runtime_minutes` | 180 | Dry-run protection (3 hours); overridable per device/switch in Admin |
 | `safety.watchdog_stale_forecast_hours` | 3 | Force off if no fresh forecast |
+| `devices.command_verify_delay_seconds` | 15 | Wait before cloud status check after turn on/off |
+| `devices.command_verify_max_attempts` | 3 | Command retries if cloud state mismatches |
+| `notifications.admin_email` | (empty) | Email alert after all retries fail (requires SMTP) |
 
 ## systemd (boot on startup)
 

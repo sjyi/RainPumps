@@ -5,14 +5,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PUMPD_DIR="${PUMPD_DIR:-${SCRIPT_DIR}/pumpd}"
 COMPOSE_FILE="${COMPOSE_FILE:-${PUMPD_DIR}/docker-compose.yml}"
-HEALTH_URL="${HEALTH_URL:-http://localhost:8081/health}"
-HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
+HEALTH_URL="${HEALTH_URL:-http://localhost:8080/health}"
+HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-60}"
 BUILD="${BUILD:-1}"
 
 log() { printf '[start_system] %s\n' "$*"; }
 die() { log "ERROR: $*"; exit 1; }
 
-PUMPD_PORT="${PUMPD_PORT:-8081}"
+PUMPD_PORT="${PUMPD_PORT:-8080}"
 ORPHAN_HELPER="${SCRIPT_DIR}/pumpd_port_orphans.sh"
 
 port_in_use() {
