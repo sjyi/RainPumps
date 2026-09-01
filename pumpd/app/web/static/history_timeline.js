@@ -305,8 +305,35 @@
     return Math.max(linear, MIN_OFF_WIDTH_PX);
   }
 
-  function renderLinearTrack(segments, markers, rangeStartMs, rangeEndMs, pxPerMinute, timeZone, zoom) {
+  function aggregateTitle(trackMode, seg, timeZone) {
+    const range = `${formatTs(seg.start, timeZone)} – ${formatTs(seg.end, timeZone)}`;
+    if (seg.kind === "gap") {
+      return `Idle · ${seg.label || ""} · ${range}`.trim();
+    }
+    if (trackMode === "system") {
+      return seg.kind === "on" ? `Any pump ON · ${range}` : `All pumps OFF · ${range}`;
+    }
+    return seg.kind === "on" ? `Any switch ON · ${range}` : `All switches OFF · ${range}`;
+  }
+
+  function renderLinearTrack(
+    segments,
+    markers,
+    rangeStartMs,
+    rangeEndMs,
+    pxPerMinute,
+    timeZone,
+    zoom,
+    trackMode
+  ) {
     const width = trackWidthPx(rangeStartMs, rangeEndMs, pxPerMinute);
+    const isAggregate = trackMode === "system" || trackMode === "device-aggregate";
+    const trackClass =
+      trackMode === "system"
+        ? "tl-track tl-track-aggregate tl-track-system"
+        : trackMode === "device-aggregate"
+          ? "tl-track tl-track-aggregate tl-track-device"
+          : "tl-track tl-track-switch";
     let segHtml = "";
 
     for (const seg of segments || []) {
@@ -318,9 +345,18 @@
       const clipEnd = Math.min(endMs, rangeEndMs);
       const left = msToX(clipStart, rangeStartMs, pxPerMinute);
       const w = segmentWidth(clipStart, clipEnd, rangeStartMs, pxPerMinute, seg.kind);
-      const title = `${seg.kind.toUpperCase()} · ${formatTs(seg.start, timeZone)} – ${formatTs(seg.end, timeZone)}`;
+      const title = isAggregate
+        ? aggregateTitle(trackMode, seg, timeZone)
+        : `${seg.kind.toUpperCase()} · ${formatTs(seg.start, timeZone)} – ${formatTs(seg.end, timeZone)}`;
 
-      if (seg.kind === "gap") {
+      if (isAggregate) {
+        if (seg.kind === "gap") {
+          segHtml += `<span class="tl-seg tl-agg-gap" style="left:${left}px;width:${w}px" title="${escapeAttr(title)}">…</span>`;
+        } else {
+          const cls = seg.kind === "on" ? "tl-agg-on" : "tl-agg-off";
+          segHtml += `<span class="tl-seg ${cls}" style="left:${left}px;width:${w}px" title="${escapeAttr(title)}"></span>`;
+        }
+      } else if (seg.kind === "gap") {
         segHtml += `<span class="tl-seg tl-gap" style="left:${left}px;width:${w}px" title="${escapeAttr(title)}">…</span>`;
       } else {
         const cls = seg.kind === "on" ? "tl-on" : "tl-off";
@@ -328,27 +364,31 @@
       }
     }
 
-    const { w: markerW, h: markerH } = markerSize(zoom || 1);
-    const markerHtml = (markers || [])
-      .map((m) => {
-        const ts = parseMs(m.ts);
-        if (ts < rangeStartMs || ts > rangeEndMs) return "";
-        const x = msToX(ts, rangeStartMs, pxPerMinute);
-        let cls = m.event_type === "turn_on" ? "on" : "off";
-        if (m.failed) cls += " failed";
-        const failNote = m.failed ? " (verify failed)" : "";
-        const title = `${m.action}${failNote} · ${formatTs(m.ts, timeZone)}\n${m.pump_name}\n${m.reason || ""}`;
-        return `<span class="tl-marker tl-marker-${cls}" data-ts="${escapeAttr(m.ts)}" style="left:${x}px;width:${markerW}px;height:${markerH}px;transform:translateX(-${markerW / 2}px)" title="${escapeAttr(title)}"></span>`;
-      })
-      .join("");
+    let markerHtml = "";
+    if (!isAggregate) {
+      const { w: markerW, h: markerH } = markerSize(zoom || 1);
+      markerHtml = (markers || [])
+        .map((m) => {
+          const ts = parseMs(m.ts);
+          if (ts < rangeStartMs || ts > rangeEndMs) return "";
+          const x = msToX(ts, rangeStartMs, pxPerMinute);
+          let cls = m.event_type === "turn_on" ? "on" : "off";
+          if (m.failed) cls += " failed";
+          const failNote = m.failed ? " (verify failed)" : "";
+          const title = `${m.action}${failNote} · ${formatTs(m.ts, timeZone)}\n${m.pump_name}\n${m.reason || ""}`;
+          return `<span class="tl-marker tl-marker-${cls}" data-ts="${escapeAttr(m.ts)}" style="left:${x}px;width:${markerW}px;height:${markerH}px;transform:translateX(-${markerW / 2}px)" title="${escapeAttr(title)}"></span>`;
+        })
+        .join("");
+    }
 
-    return `<div class="tl-track" style="width:${width}px">${segHtml}${markerHtml}</div>`;
+    return `<div class="${trackClass}" style="width:${width}px">${segHtml}${markerHtml}</div>`;
   }
 
-  function renderRow(label, trackHtml, toggleHtml, rowClass, trackWidth) {
+  function renderRow(label, trackHtml, toggleHtml, rowClass, trackWidth, labelIsHtml) {
+    const labelContent = labelIsHtml ? label : escapeAttr(label);
     return `
       <div class="tl-row ${rowClass || ""}" style="min-width:${LABEL_WIDTH + trackWidth}px">
-        <div class="tl-label" style="width:${LABEL_WIDTH}px">${toggleHtml}${escapeAttr(label)}</div>
+        <div class="tl-label" style="width:${LABEL_WIDTH}px">${toggleHtml}${labelContent}</div>
         <div class="tl-track-wrap" style="width:${trackWidth}px">${trackHtml}</div>
       </div>`;
   }
@@ -388,17 +428,21 @@
       rangeEndMs,
       pxPerMinute,
       timeZone,
-      zoom
+      zoom,
+      "system"
     );
 
     const systemToggle = `<button type="button" class="tl-toggle" data-toggle="system" aria-expanded="${expanded.system ? "true" : "false"}">${expanded.system ? "▼" : "▶"}</button>`;
-    let rows = renderRow(data.system.label, systemTrack, systemToggle, "tl-row-system", trackWidth);
+    const systemLabel = `${data.system.label} <span class="tl-track-kind">any pump</span>`;
+    let rows = renderRow(systemLabel, systemTrack, systemToggle, "tl-row-system tl-row-aggregate", trackWidth, true);
 
     if (expanded.system) {
       for (const device of data.devices || []) {
-        const devMarkers = (data.markers || []).filter((m) =>
-          device.switches.some((s) => s.name === m.pump_name)
-        );
+        const devTrackMode = device.expandable ? "device-aggregate" : "switch";
+        const devMarkers =
+          devTrackMode === "switch"
+            ? (data.markers || []).filter((m) => device.switches.some((s) => s.name === m.pump_name))
+            : [];
         const devTrack = renderLinearTrack(
           device.segments,
           devMarkers,
@@ -406,7 +450,8 @@
           rangeEndMs,
           pxPerMinute,
           timeZone,
-          zoom
+          zoom,
+          devTrackMode
         );
         let devToggle = "";
         if (device.expandable) {
@@ -415,7 +460,16 @@
         } else {
           devToggle = `<span class="tl-toggle-spacer"></span>`;
         }
-        rows += renderRow(device.label, devTrack, devToggle, "tl-row-device", trackWidth);
+        const devRowClass = device.expandable
+          ? "tl-row-device tl-row-device-aggregate tl-row-aggregate"
+          : "tl-row-device tl-row-device-single";
+        const devKind = device.expandable
+          ? `<span class="tl-track-kind">any switch · ${device.switch_count}</span>`
+          : "";
+        const devLabel = device.expandable
+          ? `${escapeAttr(device.label)} ${devKind}`
+          : device.label;
+        rows += renderRow(devLabel, devTrack, devToggle, devRowClass, trackWidth, device.expandable);
 
         if (device.expandable && expanded.devices[device.key]) {
           for (const sw of device.switches) {
@@ -427,7 +481,8 @@
               rangeEndMs,
               pxPerMinute,
               timeZone,
-              zoom
+              zoom,
+              "switch"
             );
             rows += renderRow(
               sw.label,
@@ -466,8 +521,10 @@
         </div>
       </div>
       <div class="tl-legend">
-        <span><i class="tl-legend-swatch tl-on"></i> ON</span>
-        <span><i class="tl-legend-swatch tl-off"></i> OFF</span>
+        <span><i class="tl-legend-swatch tl-legend-agg-system"></i> any pump ON</span>
+        <span><i class="tl-legend-swatch tl-legend-agg-device"></i> any switch ON</span>
+        <span><i class="tl-legend-swatch tl-on"></i> switch ON</span>
+        <span><i class="tl-legend-swatch tl-off"></i> switch OFF</span>
         <span><i class="tl-legend-swatch tl-gap"></i> idle (…)</span>
         <span><i class="tl-marker tl-marker-on tl-legend-marker"></i> turn on</span>
         <span><i class="tl-marker tl-marker-off tl-legend-marker"></i> turn off</span>

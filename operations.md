@@ -78,7 +78,7 @@ Everything on the user dashboard, plus:
 | **Command verification** | Delay before re-reading switch state after commands |
 | **Email notifications** | SMTP and Gmail OAuth setup |
 | **Test auto mode** | Rain simulation without real weather (§14) |
-| **History** | 7-day control timeline chart + forecast snapshot table |
+| **History** | 7-day control timeline (aggregate + per-switch tracks) + forecast snapshot table |
 | **Hardware health** | Pump and sensor abnormality status |
 | **Provider health** | AccuWeather / Open-Meteo / NWS last success and errors |
 | **Recent events** | Audit log of decisions and control actions |
@@ -624,7 +624,36 @@ Re-import with **Sync all devices** when ready.
 
 ### History timeline
 
-**Admin → History** shows a horizontal timeline of pump ON/OFF and phases for the last 7 days. **Now** is on the right; zoom and pan with controls. Data from `GET /api/history/timeline`. Forecast snapshot table uses `GET /api/history/forecasts`.
+**Admin → History** shows a horizontal timeline of pump ON/OFF for the last 7 days. **Now** is on the right; use **24h** / **7d**, zoom (+/−), and scroll to pan. Data from `GET /api/history/timeline`. Forecast snapshot table uses `GET /api/history/forecasts`.
+
+#### Row hierarchy
+
+The timeline is hierarchical. Expand **System** to see devices; expand a multi-outlet **device** to see individual switches.
+
+| Row | Meaning | Visual style |
+|-----|---------|--------------|
+| **System** | Any pump ON across the fleet (logical OR of all switches) | Blue **hatched band** on a tinted rail; label badge **any pump** |
+| **Device** (multi-outlet) | Any switch ON on that physical plug (OR of its outlets) | Teal **hatched band**; label badge **any switch · N** |
+| **Device** (single outlet) | Same as its one switch — no separate aggregate row styling | Solid green/gray bar (switch style) |
+| **Switch** | That outlet’s actual ON/OFF state | Solid **green** (ON) or **gray** (OFF) bar |
+
+Aggregate rows answer “was anything running?” Device rows answer “was anything on this plug running?” Switch rows show the precise outlet state and **turn on/off markers** (including failed commands).
+
+#### Markers and idle gaps
+
+- **Command markers** (vertical ticks for turn on/off) appear only on **switch** rows, not on System or multi-switch device aggregate rows.
+- Long OFF periods may collapse to an **idle (…)** gap when longer than the idle threshold (default 60 minutes in the UI request).
+- Tooltips on aggregate segments say **Any pump ON** / **Any switch ON** (or OFF); switch tooltips show **ON** / **OFF** with timestamps.
+- **Recent on chart** (below the timeline) lists turn events; click one to jump the scroll position.
+
+#### Legend
+
+The chart legend distinguishes all segment types:
+
+- **any pump ON** — blue hatch (System)
+- **any switch ON** — teal hatch (multi-outlet device)
+- **switch ON** / **switch OFF** — solid green / gray
+- **turn on** / **turn off** / **failed command** — markers on switch rows only
 
 ---
 
