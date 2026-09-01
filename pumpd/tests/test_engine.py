@@ -168,6 +168,27 @@ def test_stale_forecast_watchdog_turns_off() -> None:
     assert any(c.action == "turn_off" for c in result.commands)
 
 
+def test_stale_forecast_does_not_trip_post_rain_drain() -> None:
+    """Manual/user post-rain drain should complete even when forecast data is stale."""
+    rain = RainState(False, 0, 0.7, "forecast", NOW)
+    pump = _pump(
+        phase="post_rain_drain",
+        device_on=True,
+        post_rain_drain_started_at=NOW - timedelta(minutes=5),
+    )
+    result = evaluate(
+        now=NOW,
+        rain=rain,
+        forecast_window=[],
+        pumps=[pump],
+        rules=_rules(),
+        safety=SafetyFlags(stale_forecast=True),
+        max_runtime_by_pump={"north_pump": 60},
+    )
+    assert not any(c.action == "turn_off" for c in result.commands)
+    assert result.pumps[0].phase == "post_rain_drain"
+
+
 def test_watchdog_mqtt_exception_keeps_running() -> None:
     rain = RainState(True, 1.0, 0.9, "mqtt", NOW)
     pump = _pump(phase="running", device_on=True)

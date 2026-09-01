@@ -258,6 +258,44 @@ def test_device_group_manual_buttons(group_client: TestClient) -> None:
     assert group_modes == {"manual_on", "manual_off"}
 
 
+def test_device_group_collapsed_header_shows_circuit_status(group_client: TestClient) -> None:
+    response = group_client.get("/partials/user/status")
+    assert response.status_code == 200
+    html = response.text
+
+    assert "pump-device-circuit-status" in html
+    assert "Roof East Switch 1" in html
+    assert "Roof East Switch 2" in html
+    assert " outlets</span>" not in html
+    assert html.count('class="badge on pump-power-badge"') >= 1
+    assert html.count('class="badge off pump-power-badge"') >= 1
+
+
+def test_admin_device_group_header_shows_circuit_status(group_client: TestClient) -> None:
+    response = group_client.get("/partials/admin/status")
+    assert response.status_code == 200
+    html = response.text
+
+    assert "pump-device-group-admin" in html
+    assert "pump-device-circuit-status" in html
+    assert "Roof East Switch 1" in html
+    assert "Roof East Switch 2" in html
+    assert " outlets</span>" not in html
+    assert html.count('class="badge on pump-power-badge"') >= 1
+    assert html.count('class="badge off pump-power-badge"') >= 1
+
+
+def test_admin_device_group_has_edit_pencil_on_header_and_switches(group_client: TestClient) -> None:
+    response = group_client.get("/partials/admin/status")
+    assert response.status_code == 200
+    html = response.text
+
+    assert html.count("name-edit-toggle") >= 3
+    assert "name-cancel-edit" in html
+    assert "save-device-names-btn" in html
+    assert "propagate-cloud-toggle" in html
+
+
 @pytest.mark.parametrize(
     ("mode", "expected_mode"),
     [

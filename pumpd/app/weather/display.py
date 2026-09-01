@@ -15,9 +15,14 @@ class CurrentConditions:
     rain_mm: float
     is_day: bool
     fetched_at: datetime
+    weather_text: str = ""
+    has_precipitation: bool = False
+    provider: str = ""
 
     @property
     def description(self) -> str:
+        if self.weather_text:
+            return self.weather_text
         return weather_code_label(self.weather_code)
 
 

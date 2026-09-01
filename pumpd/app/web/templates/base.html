@@ -344,6 +344,22 @@
       margin: 0.75rem 0 0.5rem;
     }
     .device-probe-bar .probe-devices-status { min-height: 1.25rem; }
+    .device-probe-bar .auto-mode-btn {
+      background: #ecfdf5;
+      color: #047857;
+      border-color: #6ee7b7;
+    }
+    .device-probe-bar .auto-mode-btn:hover {
+      background: #d1fae5;
+    }
+    .device-probe-bar .drain-puddles-btn {
+      background: #dbeafe;
+      color: #1e40af;
+      border-color: #93c5fd;
+    }
+    .device-probe-bar .drain-puddles-btn:hover {
+      background: #bfdbfe;
+    }
     .pump-card-details {
       margin-top: 0.75rem;
       padding-top: 0.75rem;
@@ -387,6 +403,32 @@
       align-items: center;
       gap: 0.5rem;
       margin-left: auto;
+    }
+    .pump-device-circuit-status {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem 0.65rem;
+      align-items: center;
+    }
+    .pump-device-circuit-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+    .pump-device-circuit-label {
+      font-size: 0.78rem;
+      color: #4b5563;
+      max-width: 8rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .pump-device-circuit-item .badge {
+      font-size: 0.72rem;
+      padding: 0.12rem 0.4rem;
+    }
+    .pump-device-collapsible.is-expanded .pump-device-circuit-status {
+      display: none;
     }
     .pump-device-quick-actions {
       display: flex;
@@ -728,6 +770,8 @@
     }
 
     var probeDevicesInFlight = false;
+    var manualDrainInFlight = false;
+    var revertAllAutoInFlight = false;
 
     async function probeAllDeviceConnections(statusEl) {
       if (probeDevicesInFlight) return;
@@ -749,12 +793,68 @@
       }
     }
 
+    async function revertAllToAuto(statusEl) {
+      if (revertAllAutoInFlight) return;
+      revertAllAutoInFlight = true;
+      if (statusEl) statusEl.textContent = 'Restoring automatic control…';
+      try {
+        var response = await fetch('/api/auto/start', { method: 'POST' });
+        if (!response.ok) {
+          if (statusEl) statusEl.textContent = 'Failed to restore automatic mode.';
+          return;
+        }
+        var data = await response.json();
+        if (statusEl && data.message) statusEl.textContent = data.message;
+        if (window.htmx) htmx.trigger('#status-panel', 'load');
+      } catch (err) {
+        if (statusEl) statusEl.textContent = 'Failed to restore automatic mode.';
+      } finally {
+        revertAllAutoInFlight = false;
+      }
+    }
+
+    async function startManualDrain(statusEl) {
+      if (manualDrainInFlight) return;
+      manualDrainInFlight = true;
+      if (statusEl) statusEl.textContent = 'Starting drain…';
+      try {
+        var response = await fetch('/api/drain/start', { method: 'POST' });
+        if (!response.ok) {
+          if (statusEl) statusEl.textContent = 'Drain failed to start.';
+          return;
+        }
+        var data = await response.json();
+        if (statusEl && data.message) statusEl.textContent = data.message;
+        if (window.htmx) htmx.trigger('#status-panel', 'load');
+      } catch (err) {
+        if (statusEl) statusEl.textContent = 'Drain failed to start.';
+      } finally {
+        manualDrainInFlight = false;
+      }
+    }
+
     document.body.addEventListener('click', function(evt) {
       var probeBtn = evt.target.closest('.probe-devices-btn');
       if (probeBtn) {
         var bar = probeBtn.closest('.device-probe-bar');
         var statusEl = bar ? bar.querySelector('.probe-devices-status') : null;
         probeAllDeviceConnections(statusEl);
+        return;
+      }
+
+      var drainBtn = evt.target.closest('.drain-puddles-btn');
+      if (drainBtn) {
+        var drainBar = drainBtn.closest('.device-probe-bar');
+        var drainStatusEl = drainBar ? drainBar.querySelector('.probe-devices-status') : null;
+        startManualDrain(drainStatusEl);
+        return;
+      }
+
+      var autoBtn = evt.target.closest('.auto-mode-btn');
+      if (autoBtn) {
+        var autoBar = autoBtn.closest('.device-probe-bar');
+        var autoStatusEl = autoBar ? autoBar.querySelector('.probe-devices-status') : null;
+        revertAllToAuto(autoStatusEl);
         return;
       }
 

@@ -18,8 +18,18 @@ class LocationConfig(BaseModel):
 
 
 class WeatherConfig(BaseModel):
-    poll_minutes: int = 30
-    providers: list[str] = Field(default_factory=lambda: ["open_meteo", "nws"])
+    poll_minutes: int = 10
+    current_poll_minutes: int = 10
+    providers: list[str] = Field(default_factory=lambda: ["accuweather", "open_meteo", "nws"])
+    display_provider: str = "accuweather"
+
+    @model_validator(mode="after")
+    def _validate_poll_intervals(self) -> WeatherConfig:
+        if self.poll_minutes < 5:
+            raise ValueError("weather.poll_minutes must be at least 5")
+        if self.current_poll_minutes < 5:
+            raise ValueError("weather.current_poll_minutes must be at least 5")
+        return self
 
 
 class DutyCycleConfig(BaseModel):
@@ -209,6 +219,7 @@ class EnvSettings(BaseSettings):
     meross_password: str = ""
     meross_api_base: str = "https://iotx-us.meross.com"
     meross_mfa_code: str = ""
+    accuweather_api_key: str = ""
 
 
 def load_config(path: Path | str = "config.yaml") -> AppConfig:
@@ -292,15 +303,44 @@ def save_display_names(
             by_name[name]["label"] = cleaned
         else:
             by_name[name].pop("label", None)
-    data["pumps"] = list(by_name.values())
 
-    rows = [
-        row.model_dump(exclude_none=True)
-        for row in device_labels
-        if (row.label or "").strip()
-    ]
-    if rows:
-        data["device_labels"] = rows
+    ordered_pumps: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for pump in pumps:
+        if not isinstance(pump, dict):
+            continue
+        name = pump.get("name")
+        if not isinstance(name, str) or name not in by_name or name in seen:
+            continue
+        ordered_pumps.append(by_name[name])
+        seen.add(name)
+    for name, pump in by_name.items():
+        if name not in seen:
+            ordered_pumps.append(pump)
+    data["pumps"] = ordered_pumps
+
+    existing_device_rows = data.get("device_labels", [])
+    if not isinstance(existing_device_rows, list):
+        existing_device_rows = []
+    device_by_key: dict[str, dict[str, Any]] = {}
+    for row in existing_device_rows:
+        if not isinstance(row, dict):
+            continue
+        backend = str(row.get("device_backend") or "").strip()
+        device_id = str(row.get("device_id") or "").strip()
+        if backend and device_id:
+            device_by_key[f"{backend}:{device_id}"] = row
+
+    for row in device_labels:
+        key = f"{row.device_backend}:{row.device_id}"
+        cleaned = (row.label or "").strip()
+        if cleaned:
+            device_by_key[key] = row.model_dump(exclude_none=True)
+        elif key in device_by_key:
+            del device_by_key[key]
+
+    if device_by_key:
+        data["device_labels"] = list(device_by_key.values())
     elif "device_labels" in data:
         del data["device_labels"]
 

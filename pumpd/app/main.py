@@ -65,6 +65,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
         meross_lan_first=config.devices.meross_lan_first,
         google_oauth_client_id=env.google_oauth_client_id,
         google_oauth_client_secret=env.google_oauth_client_secret,
+        accuweather_api_key=env.accuweather_api_key,
         config_path=config_path,
     )
     scheduler = create_scheduler(config, service)

@@ -13,8 +13,21 @@
       <span class="pump-device-group-title">{{ g.label }}</span>
     </button>
     <div class="pump-device-group-meta">
+      <div class="pump-device-circuit-status" aria-label="Circuit power status">
+        {% for p in g.pumps %}
+        <span class="pump-device-circuit-item">
+          <span class="pump-device-circuit-label"
+                data-pump-name="{{ p.name }}"
+                data-fallback="{{ p.display_label or (p.switch_code | replace('_', ' ') | title) }}">{{ p.display_label or (p.switch_code | replace('_', ' ') | title) }}</span>
+          {% if p.device_on %}
+          <span class="badge on pump-power-badge">ON</span>
+          {% else %}
+          <span class="badge off pump-power-badge">OFF</span>
+          {% endif %}
+        </span>
+        {% endfor %}
+      </div>
       <span class="badge {{ g.online_status }}">{{ g.online_status | replace('_', ' ') | title }}</span>
-      <span class="meta">{{ g.switch_count }} outlets</span>
     </div>
   </div>
   {% include "partials/manual_control_group.html" %}

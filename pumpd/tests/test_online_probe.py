@@ -169,6 +169,30 @@ async def test_get_pump_cards_shows_live_switch_state_in_manual_mode(service: Pu
 
 
 @pytest.mark.asyncio
+async def test_get_pump_cards_offline_clears_stale_on(service: PumpService) -> None:
+    service._ensure_pump_rows()
+    row = service._get_pump_row("pump_a")
+    assert row is not None
+    row.device_on = True
+    with service.session_factory() as session:
+        session.merge(row)
+        session.commit()
+
+    service.refresh_meross_ui_state = AsyncMock(  # type: ignore[method-assign]
+        return_value={"refreshed": False, "cached": True}
+    )
+    service.probe_pumps_online = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "pump_a": {"status": "offline", "detail": "meross_cloud:offline"},
+        }
+    )
+
+    cards = await service.get_pump_cards()
+    assert cards[0]["device_on"] is False
+    assert cards[0]["online_status"] == "offline"
+
+
+@pytest.mark.asyncio
 async def test_refresh_all_pump_online_status_syncs_switch_states(service: PumpService) -> None:
     service._ensure_pump_rows()
     for name in ("pump_a", "pump_b", "pump_c"):

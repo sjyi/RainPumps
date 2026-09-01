@@ -10,6 +10,12 @@
       <span class="name-display-value switch-name-display"
             data-pump-name="{{ p.name }}"
             data-fallback="{{ p.display_label or (p.switch_code | replace('_', ' ') | title) }}">{{ p.display_label or (p.switch_code | replace('_', ' ') | title) }}</span>
+      <button type="button" class="name-edit-toggle name-edit-toggle-inline" title="Edit device and switch names" aria-label="Edit names">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 20h9"/>
+          <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+        </svg>
+      </button>
       <label class="name-edit-field name-edit-control name-edit-field-inline">
         <input type="text" class="switch-label-input" data-pump-name="{{ p.name }}"
                placeholder="Switch name" value="{{ p.display_label or '' }}" disabled>
@@ -26,6 +32,7 @@
             <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/>
           </svg>
         </button>
+        <button type="button" class="name-cancel-edit" title="Cancel editing" aria-label="Cancel editing">Cancel</button>
       </div>
     </div>
     {% if p.device_id and p.device_backend %}
@@ -128,13 +135,17 @@
   </div>
   {% if not nested %}
   <div class="name-save-row name-edit-control">
+    <span class="name-editing-badge">Editing names</span>
     <label class="name-propagate-label">
       <input type="checkbox" class="propagate-cloud-toggle" checked>
       Push names to cloud
     </label>
+    <p class="meta name-propagate-hint">Meross: cloud rename is not supported by Meross API; names save in pumpd only. Use the Meross app to change cloud display names.</p>
+    <button type="button" class="name-cancel-edit">Cancel</button>
     <button type="button" class="primary save-device-names-btn">Save names</button>
     <p class="name-save-status meta" aria-live="polite"></p>
     <ul class="names-cloud-result" hidden></ul>
+    <details class="names-cloud-trace" hidden></details>
   </div>
   {% endif %}
 </div>

@@ -103,6 +103,9 @@ class WeatherCurrentRow(Base):
     rain_mm: Mapped[float] = mapped_column(Float)
     is_day: Mapped[bool] = mapped_column(default=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    provider: Mapped[str] = mapped_column(String(32), default="")
+    has_precipitation: Mapped[bool] = mapped_column(default=False)
+    weather_text: Mapped[str] = mapped_column(String(128), default="")
 
 
 class WeatherDailyRow(Base):

@@ -75,6 +75,10 @@ class DisplayNamesRequest(BaseModel):
     propagate_cloud: bool = True
 
 
+class SyncFleetRequest(BaseModel):
+    pumps: list[str] | None = None
+
+
 class DeviceDisplayOrderRequest(BaseModel):
     order: list[str] = Field(default_factory=list)
 
@@ -318,6 +322,20 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
             ),
             "recovered_online": recovered,
         }
+
+    @router.post("/api/drain/start")
+    async def start_manual_drain() -> dict[str, Any]:
+        return await service.start_manual_drain()
+
+    @router.post("/api/auto/start")
+    async def revert_all_to_auto() -> dict[str, Any]:
+        return await service.revert_all_to_auto()
+
+    @router.post("/api/pumps/sync-fleet", dependencies=[Depends(verify_auth)])
+    async def sync_pumps_to_fleet(body: SyncFleetRequest | None = None) -> dict[str, Any]:
+        """Align idle or newly added auto pumps with the current fleet auto program."""
+        pump_names = body.pumps if body and body.pumps else None
+        return await service.sync_pumps_to_fleet(pump_names)
 
     @router.get("/api/status")
     async def api_status() -> dict[str, Any]:
@@ -841,7 +859,7 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
                 )
             )
         try:
-            saved = await service.import_pumps(pumps, mode=body.mode)
+            import_result = await service.import_pumps(pumps, mode=body.mode)
         except OSError as exc:
             raise HTTPException(
                 status_code=500,
@@ -850,7 +868,11 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
                     "If running in Docker, ensure config.yaml is not mounted read-only."
                 ),
             ) from exc
-        return {"pumps": [{"name": p.name, "enabled": p.enabled} for p in saved]}
+        saved = import_result["pumps"]
+        return {
+            "pumps": [{"name": p.name, "enabled": p.enabled} for p in saved],
+            "fleet_sync": import_result.get("fleet_sync", {}),
+        }
 
     @router.post("/api/devices/auto-import", dependencies=[Depends(verify_auth)])
     async def api_auto_import_devices(
@@ -899,7 +921,7 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
                 "message": "No devices found to import",
             }
         try:
-            saved = await service.import_pumps(pumps, mode=mode)
+            import_result = await service.import_pumps(pumps, mode=mode)
         except OSError as exc:
             raise HTTPException(
                 status_code=500,
@@ -908,7 +930,15 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
                     "If running in Docker, ensure config.yaml is not mounted read-only."
                 ),
             ) from exc
+        saved = import_result["pumps"]
+        fleet_sync = import_result.get("fleet_sync") or {}
         devices, import_counts = _annotated(saved)
+        sync_note = ""
+        if fleet_sync.get("synced"):
+            sync_note = (
+                f"; synced {len(fleet_sync['synced'])} new pump(s) to fleet "
+                f"({fleet_sync.get('reference_phase', 'auto')})"
+            )
         return {
             "pumps": [{"name": p.name, "enabled": p.enabled} for p in saved],
             "stats": stats,
@@ -917,9 +947,10 @@ def create_router(config: AppConfig, service: PumpService, scheduler: Any) -> AP
             "devices": devices,
             "setup": discovery.get("setup"),
             "import_status": import_counts,
+            "fleet_sync": fleet_sync,
             "message": (
                 f"Synced {len(pumps)} pump(s): {stats['added']} added, "
-                f"{stats['updated']} updated"
+                f"{stats['updated']} updated{sync_note}"
             ),
         }
 

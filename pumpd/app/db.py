@@ -40,6 +40,24 @@ def _migrate_schema(engine: Engine) -> None:
                 for stmt in alters:
                     conn.execute(text(stmt))
 
+    if "weather_current" in inspector.get_table_names():
+        columns = {col["name"] for col in inspector.get_columns("weather_current")}
+        weather_alters: list[str] = []
+        if "provider" not in columns:
+            weather_alters.append("ALTER TABLE weather_current ADD COLUMN provider VARCHAR(32) DEFAULT ''")
+        if "has_precipitation" not in columns:
+            weather_alters.append(
+                "ALTER TABLE weather_current ADD COLUMN has_precipitation BOOLEAN DEFAULT 0"
+            )
+        if "weather_text" not in columns:
+            weather_alters.append(
+                "ALTER TABLE weather_current ADD COLUMN weather_text VARCHAR(128) DEFAULT ''"
+            )
+        if weather_alters:
+            with engine.begin() as conn:
+                for stmt in weather_alters:
+                    conn.execute(text(stmt))
+
 
 def init_db(database_url: str) -> sessionmaker[Session]:
     engine = make_engine(database_url)

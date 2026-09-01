@@ -83,6 +83,7 @@ def test_admin_ui_has_auto_import(client: TestClient) -> None:
     assert response.status_code == 200
     assert "Sync all devices" in response.text
     assert "auto-import-devices-btn" in response.text
+    assert "sync-fleet-btn" in response.text
 
 
 def test_auto_import_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -104,7 +105,13 @@ def test_auto_import_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr("app.web.routes.auto_import_devices", fake_auto_import)
     monkeypatch.setattr(
         "app.service.PumpService.import_pumps",
-        AsyncMock(return_value=[PumpConfig(name="meross_pump")]),
+        AsyncMock(
+            return_value={
+                "pumps": [PumpConfig(name="meross_pump")],
+                "new_pumps": ["meross_pump"],
+                "fleet_sync": {"synced": [], "reason": "fleet idle"},
+            }
+        ),
     )
 
     response = client.post("/api/devices/auto-import?lan_scan=false")

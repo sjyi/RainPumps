@@ -99,20 +99,12 @@ def test_collect_meross_cloud_names_maps_device_and_switch_labels() -> None:
     assert cloud.pump_labels["roof_sump"] == "2nd fl rm 206"
 
 
-def test_diff_meross_cloud_names_detects_stale_local_labels() -> None:
+def test_diff_meross_cloud_names_fills_unlabeled_pumps() -> None:
     config = AppConfig(
         pumps=[
             PumpConfig(
                 name="roof_sump",
-                label="2nd Fl Roof Sump",
                 meross=MerossConfig(device_uuid="abc123", channel=1),
-            )
-        ],
-        device_labels=[
-            DeviceLabelOverride(
-                device_backend="meross",
-                device_id="abc123",
-                label="Old Device Name",
             )
         ],
     )
@@ -131,6 +123,38 @@ def test_diff_meross_cloud_names_detects_stale_local_labels() -> None:
     assert device_updates == {"meross:abc123": "Roof Plug"}
 
 
+def test_diff_meross_cloud_names_preserves_explicit_local_labels() -> None:
+    config = AppConfig(
+        pumps=[
+            PumpConfig(
+                name="roof_sump",
+                label="User Switch Name",
+                meross=MerossConfig(device_uuid="abc123", channel=1),
+            )
+        ],
+        device_labels=[
+            DeviceLabelOverride(
+                device_backend="meross",
+                device_id="abc123",
+                label="User Device Name",
+            )
+        ],
+    )
+    cloud = collect_meross_cloud_names(
+        [
+            _meross_info(
+                uuid="abc123",
+                dev_name="Roof Plug",
+                channels=[{"channel": 1, "type": "Switch", "devName": "2nd fl rm 206"}],
+            )
+        ],
+        config.pumps,
+    )
+    pump_updates, device_updates = diff_meross_cloud_names(config, cloud)
+    assert pump_updates == {}
+    assert device_updates == {}
+
+
 @pytest.mark.asyncio
 async def test_sync_meross_display_names_from_cloud_persists(tmp_path: Path) -> None:
     from app.db import init_db
@@ -145,14 +169,9 @@ async def test_sync_meross_display_names_from_cloud_persists(tmp_path: Path) -> 
                 "  password: secret",
                 "pumps:",
                 "  - name: roof_sump",
-                "    label: 2nd Fl Roof Sump",
                 "    meross:",
                 "      device_uuid: abc123",
                 "      channel: 1",
-                "device_labels:",
-                "  - device_backend: meross",
-                "    device_id: abc123",
-                "    label: Old Device Name",
             ]
         ),
         encoding="utf-8",
@@ -181,6 +200,57 @@ async def test_sync_meross_display_names_from_cloud_persists(tmp_path: Path) -> 
     loaded = load_config(cfg_path)
     assert pump_display_label(loaded.pumps[0]) == "2nd fl rm 206"
     assert device_labels_map(loaded)["meross:abc123"] == "Roof Plug"
+
+
+@pytest.mark.asyncio
+async def test_sync_meross_display_names_skips_explicit_user_labels(tmp_path: Path) -> None:
+    from app.db import init_db
+    from app.service import PumpService
+
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        "\n".join(
+            [
+                "meross:",
+                "  email: user@example.com",
+                "  password: secret",
+                "pumps:",
+                "  - name: roof_sump",
+                "    label: User Switch Name",
+                "    meross:",
+                "      device_uuid: abc123",
+                "      channel: 1",
+                "device_labels:",
+                "  - device_backend: meross",
+                "    device_id: abc123",
+                "    label: User Device Name",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg = load_config(cfg_path)
+    session_factory = init_db(f"sqlite:///{tmp_path / 'pumpd.db'}")
+    service = PumpService(cfg, session_factory, config_path=str(cfg_path))
+    service.meross_session = MagicMock()
+    service.meross_session.configured = True
+    service.meross_session.started = True
+    service.meross_session.startup = AsyncMock()
+    service.meross_session.list_cloud_devices = AsyncMock(
+        return_value=[
+            _meross_info(
+                uuid="abc123",
+                dev_name="Roof Plug",
+                channels=[{"channel": 1, "type": "Switch", "devName": "2nd fl rm 206"}],
+            )
+        ]
+    )
+
+    result = await service.sync_meross_display_names_from_cloud()
+    assert result["updated"] is False
+
+    loaded = load_config(cfg_path)
+    assert pump_display_label(loaded.pumps[0]) == "User Switch Name"
+    assert device_labels_map(loaded)["meross:abc123"] == "User Device Name"
 
 
 @pytest.mark.asyncio

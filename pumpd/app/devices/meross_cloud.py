@@ -36,6 +36,13 @@ def _is_dual_outlet_device(device_type: str) -> bool:
     return any(normalized.startswith(prefix) for prefix in _DUAL_OUTLET_PREFIXES)
 
 
+def meross_entry_channel(entry: dict[str, Any], index: int) -> int:
+    """Resolve Meross cloud channel number for a channels[] metadata row."""
+    if "channel" in entry:
+        return int(entry["channel"])
+    return index
+
+
 def iter_meross_outlets(
     channels: list[Any] | None,
     *,
@@ -60,7 +67,7 @@ def iter_meross_outlets(
             continue
         if ch_type and ch_type.lower() != "switch":
             continue
-        channel = int(ch.get("channel", index))
+        channel = meross_entry_channel(ch, index)
         named.append((channel, name or f"Switch {len(named) + 1}"))
 
     if _is_dual_outlet_device(device_type):
@@ -327,6 +334,13 @@ class MerossCloudSession:
     def clear_togglex_cache(self) -> None:
         self._togglex_cache.clear()
 
+    def _cloud_api_base(self) -> str:
+        if self._http is not None:
+            api_url = getattr(self._http, "_api_url", None)
+            if api_url:
+                return str(api_url)
+        return self._api_base_url
+
     async def cloud_post(self, api_path: str, params: dict[str, Any]) -> Any:
         """Authenticated Meross HTTP POST (same signing as devList)."""
         if self._http is None:
@@ -336,7 +350,7 @@ class MerossCloudSession:
         from meross_iot.http_api import MerossHttpClient
 
         path = api_path if api_path.startswith("/") else f"/{api_path}"
-        url = f"{self._api_base_url}{path}"
+        url = f"{self._cloud_api_base()}{path}"
         return await MerossHttpClient._async_authenticated_post(
             url=url,
             params_data=params,
@@ -348,28 +362,94 @@ class MerossCloudSession:
             stats_counter=self._http._stats_counter,
         )
 
+    async def fetch_cloud_device_info(self, device_uuid: str) -> dict[str, Any] | None:
+        data = await self.cloud_post("/v1/Device/devInfo", {"uuid": device_uuid})
+        return data if isinstance(data, dict) else None
+
+    @staticmethod
+    def _channel_label(info: dict[str, Any], channel: int) -> str | None:
+        channels = info.get("channels")
+        if not isinstance(channels, list):
+            return None
+        for index, entry in enumerate(channels):
+            if not isinstance(entry, dict):
+                continue
+            if meross_entry_channel(entry, index) == channel:
+                label = str(entry.get("devName") or "").strip()
+                return label or None
+        return None
+
+    async def _verify_cloud_device_info(
+        self,
+        device_uuid: str,
+        *,
+        dev_name: str | None = None,
+        channel: int | None = None,
+        channel_name: str | None = None,
+    ) -> bool:
+        info = await self.fetch_cloud_device_info(device_uuid)
+        if not info:
+            return False
+        if dev_name is not None:
+            if str(info.get("devName") or "").strip() != dev_name.strip():
+                return False
+        if channel is not None and channel_name is not None:
+            actual = self._channel_label(info, channel)
+            if actual != channel_name.strip():
+                return False
+        return True
+
+    _MEROSS_RENAME_UNSUPPORTED = (
+        "Meross cloud API does not persist name changes (/v1/Device/devInfo is read-only). "
+        "Names are saved in pumpd; rename devices and outlets in the Meross app."
+    )
+
     async def update_cloud_device_name(self, device_uuid: str, dev_name: str) -> dict[str, Any]:
         cleaned = (dev_name or "").strip()
         if not cleaned:
             return {"success": False, "message": "missing device name"}
-        last_error = "Meross cloud did not accept device name update"
-        for path in (
-            "/v1/Device/setInfo",
-            "/v1/Device/devInfo/set",
-            "/v1/Device/changeDevName",
-        ):
-            try:
-                await self.cloud_post(path, {"uuid": device_uuid, "devName": cleaned})
-                return {"success": True, "message": "updated device name in Meross cloud"}
-            except Exception as exc:
-                last_error = str(exc)
-                logger.debug(
-                    "meross device rename via %s failed for %s: %s",
-                    path,
-                    device_uuid[:8],
-                    exc,
-                )
-        return {"success": False, "message": last_error}
+        api_path = "/v1/Device/devInfo"
+        info = await self.fetch_cloud_device_info(device_uuid)
+        if info is None:
+            return {"success": False, "message": "device not found in Meross cloud"}
+        payload = dict(info)
+        payload["uuid"] = device_uuid
+        payload["devName"] = cleaned
+        try:
+            await self.cloud_post(api_path, payload)
+        except Exception as exc:
+            logger.info(
+                "meross device rename failed via %s uuid=%s: %s",
+                api_path,
+                device_uuid[:8],
+                exc,
+            )
+            return {"success": False, "message": str(exc), "api_path": api_path}
+        if await self._verify_cloud_device_info(device_uuid, dev_name=cleaned):
+            logger.info(
+                "meross device rename ok via %s uuid=%s name=%r",
+                api_path,
+                device_uuid[:8],
+                cleaned,
+            )
+            return {
+                "success": True,
+                "message": "updated device name in Meross cloud",
+                "api_path": api_path,
+            }
+        logger.info(
+            "meross device rename not persisted via %s uuid=%s name=%r",
+            api_path,
+            device_uuid[:8],
+            cleaned,
+        )
+        return {
+            "success": False,
+            "unsupported": True,
+            "verified": False,
+            "message": self._MEROSS_RENAME_UNSUPPORTED,
+            "api_path": api_path,
+        }
 
     async def update_cloud_switch_name(
         self,
@@ -383,6 +463,11 @@ class MerossCloudSession:
         cleaned = (name or "").strip()
         if not cleaned:
             return {"success": False, "message": "missing switch name"}
+        info = await self.fetch_cloud_device_info(device_uuid)
+        if info is None:
+            return {"success": False, "message": "device not found in Meross cloud"}
+        device_type = device_type or str(info.get("deviceType") or "")
+        channels = channels if isinstance(channels, list) else info.get("channels")
         outlets = iter_meross_outlets(channels, device_type=device_type)
         if len(outlets) <= 1:
             return await self.update_cloud_device_name(device_uuid, cleaned)
@@ -390,36 +475,80 @@ class MerossCloudSession:
             return {"success": False, "message": "missing Meross channel metadata"}
         updated_channels: list[Any] = []
         changed = False
-        for entry in channels:
+        for index, entry in enumerate(channels):
             if not isinstance(entry, dict):
                 updated_channels.append(entry)
                 continue
             row = dict(entry)
-            entry_channel = int(row.get("channel", -1))
+            entry_channel = meross_entry_channel(row, index)
             if entry_channel == channel:
                 row["devName"] = cleaned
+                row["channel"] = channel
                 changed = True
             updated_channels.append(row)
         if not changed:
-            return {"success": False, "message": f"Meross channel {channel} not found"}
-        last_error = "Meross cloud did not accept outlet name update"
-        for path in ("/v1/Device/setInfo", "/v1/Device/devInfo/set"):
-            try:
-                await self.cloud_post(
-                    path,
-                    {"uuid": device_uuid, "channels": updated_channels},
-                )
-                return {"success": True, "message": "updated outlet name in Meross cloud"}
-            except Exception as exc:
-                last_error = str(exc)
-                logger.debug(
-                    "meross switch rename via %s failed for %s ch%s: %s",
-                    path,
-                    device_uuid[:8],
-                    channel,
-                    exc,
-                )
-        return {"success": False, "message": last_error}
+            return {
+                "success": False,
+                "message": f"Meross channel {channel} not found",
+                "channel": channel,
+                "device_type": device_type,
+            }
+        api_path = "/v1/Device/devInfo"
+        payload = dict(info)
+        payload["uuid"] = device_uuid
+        payload["channels"] = updated_channels
+        try:
+            await self.cloud_post(api_path, payload)
+        except Exception as exc:
+            logger.info(
+                "meross switch rename failed via %s uuid=%s channel=%s: %s",
+                api_path,
+                device_uuid[:8],
+                channel,
+                exc,
+            )
+            return {
+                "success": False,
+                "message": str(exc),
+                "channel": channel,
+                "device_type": device_type,
+                "api_path": api_path,
+            }
+        if await self._verify_cloud_device_info(
+            device_uuid,
+            channel=channel,
+            channel_name=cleaned,
+        ):
+            logger.info(
+                "meross switch rename ok via %s uuid=%s channel=%s name=%r",
+                api_path,
+                device_uuid[:8],
+                channel,
+                cleaned,
+            )
+            return {
+                "success": True,
+                "message": "updated outlet name in Meross cloud",
+                "api_path": api_path,
+                "channel": channel,
+                "device_type": device_type,
+            }
+        logger.info(
+            "meross switch rename not persisted via %s uuid=%s channel=%s name=%r",
+            api_path,
+            device_uuid[:8],
+            channel,
+            cleaned,
+        )
+        return {
+            "success": False,
+            "unsupported": True,
+            "verified": False,
+            "message": self._MEROSS_RENAME_UNSUPPORTED,
+            "api_path": api_path,
+            "channel": channel,
+            "device_type": device_type,
+        }
 
     def set_cached_channel_state(self, device_uuid: str, channel: int, on: bool) -> None:
         prior = self._togglex_cache.get(device_uuid)

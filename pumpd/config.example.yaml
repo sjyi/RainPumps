@@ -10,8 +10,10 @@ display:
   units: imperial   # imperial (°F, in) or metric (°C, mm)
 
 weather:
-  poll_minutes: 30
-  providers: [open_meteo, nws]
+  poll_minutes: 10
+  current_poll_minutes: 10
+  providers: [accuweather, open_meteo, nws]
+  display_provider: accuweather
 
 rules:
   evaluate_minutes: 10

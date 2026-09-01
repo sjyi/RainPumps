@@ -23,6 +23,13 @@ def create_scheduler(config: AppConfig, service: PumpService) -> AsyncIOSchedule
         replace_existing=True,
     )
     scheduler.add_job(
+        service.poll_current_conditions,
+        "interval",
+        minutes=config.weather.current_poll_minutes,
+        id="poll_current_conditions",
+        replace_existing=True,
+    )
+    scheduler.add_job(
         service.run_evaluation,
         "interval",
         minutes=config.rules.evaluate_minutes,

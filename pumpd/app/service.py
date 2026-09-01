@@ -114,6 +114,8 @@ from app.signals.forecast_signal import ForecastSignal
 from app.signals.mqtt_signal import MqttRainSignal
 from app.switch_stagger import group_turn_on_commands, sort_commands_by_switch, sort_pumps_by_switch
 from app.time_format import format_local
+from app.weather.accuweather import AccuWeatherProvider
+from app.weather.base import WeatherProvider
 from app.weather.display import CurrentConditions, DailyForecast
 from app.weather.nws import NwsProvider
 from app.weather.open_meteo import OpenMeteoProvider
@@ -130,10 +132,15 @@ class DeviceCommandError(Exception):
         self.result = result
         super().__init__(result.message)
 
-PROVIDERS = {
-    "open_meteo": OpenMeteoProvider(),
-    "nws": NwsProvider(),
-}
+def build_weather_providers(accuweather_api_key: str = "") -> dict[str, WeatherProvider]:
+    providers: dict[str, WeatherProvider] = {
+        "open_meteo": OpenMeteoProvider(),
+        "nws": NwsProvider(),
+    }
+    key = accuweather_api_key.strip()
+    if key:
+        providers["accuweather"] = AccuWeatherProvider(key)
+    return providers
 
 
 class PumpService:
@@ -153,10 +160,19 @@ class PumpService:
         meross_lan_first: bool = False,
         google_oauth_client_id: str = "",
         google_oauth_client_secret: str = "",
+        accuweather_api_key: str = "",
         config_path: str = "config.yaml",
     ) -> None:
         self.config = config
         self.config_path = config_path
+        self.weather_providers = build_weather_providers(accuweather_api_key)
+        if (
+            "accuweather" in config.weather.providers
+            and "accuweather" not in self.weather_providers
+        ):
+            logger.warning(
+                "accuweather is configured in weather.providers but ACCUWEATHER_API_KEY is missing"
+            )
         self.google_oauth_client_id = google_oauth_client_id
         self.google_oauth_client_secret = google_oauth_client_secret
         self.session_factory = session_factory
@@ -178,7 +194,7 @@ class PumpService:
         self.hardware = HardwareMonitor(config, session_factory)
         self.devices: dict[str, CompositePumpDevice] = {}
         self.locks: dict[str, asyncio.Lock] = {}
-        self.forecast_signal = ForecastSignal(session_factory, config.rules)
+        self.forecast_signal = ForecastSignal(session_factory, config.rules, config.weather)
         self.mqtt_signal = MqttRainSignal(config.mqtt)
         self.scheduler_running = False
         self.rain_simulation = RainSimulationState()
@@ -190,6 +206,8 @@ class PumpService:
         self._online_probe_cache_ttl = 60.0
         self._meross_ui_cache_at: float = 0.0
         self._meross_ui_cache_ttl = 60.0
+        self._config_mtime: float = 0.0
+        self._note_config_mtime()
         self._tuya_ip_cache: dict[str, str] = {}
         self._build_devices()
 
@@ -201,12 +219,26 @@ class PumpService:
             redirect_uri=default_redirect_uri(self.config.notifications.public_base_url),
         )
 
+    def _note_config_mtime(self) -> None:
+        path = Path(self.config_path)
+        if path.exists():
+            self._config_mtime = path.stat().st_mtime
+
+    def _reload_config_if_changed(self) -> None:
+        path = Path(self.config_path)
+        if not path.exists():
+            return
+        mtime = path.stat().st_mtime
+        if mtime != self._config_mtime:
+            self._reload_config()
+
     def _reload_config(self) -> None:
         from app.config import load_config
 
         self.config = load_config(self.config_path)
         self.notifier.config = self.config
         self.gmail_client = self._build_gmail_client()
+        self._note_config_mtime()
 
     def _create_tuya_cloud_client(self) -> Any | None:
         base = Path(self.config_path).parent
@@ -381,6 +413,7 @@ class PumpService:
         self._ensure_pump_rows()
         self._restore_manual_revert_schedules()
         await self.reconcile_devices()
+        await self.poll_current_conditions()
         await self.poll_forecasts()
 
     async def shutdown(self) -> None:
@@ -412,7 +445,9 @@ class PumpService:
         await self.meross_session.shutdown()
         await self.mqtt_signal.stop()
 
-    def _ensure_pump_rows(self) -> None:
+    def _ensure_pump_rows(self) -> list[str]:
+        """Ensure SQLite state rows exist; return names of newly created pumps."""
+        added: list[str] = []
         with self.session_factory() as session:
             existing = {r.name for r in session.scalars(select(PumpStateRow)).all()}
             now = datetime.now(UTC)
@@ -430,15 +465,177 @@ class PumpService:
                             updated_at=now,
                         )
                     )
+                    added.append(pump.name)
             session.commit()
+        return added
+
+    _FLEET_ACTIVE_PHASES = frozenset({"running", "pre_rain", "post_rain_drain"})
+
+    def _pick_fleet_reference(
+        self,
+        rows: dict[str, PumpStateRow],
+        *,
+        exclude: set[str] | None = None,
+    ) -> PumpStateRow | None:
+        """Choose an existing auto pump that represents the current fleet program."""
+        exclude = exclude or set()
+        pump_cfgs = {p.name: p for p in self.config.pumps}
+        phase_rank = {"running": 3, "pre_rain": 2, "post_rain_drain": 1}
+        candidates: list[PumpStateRow] = []
+        for name, row in rows.items():
+            if name in exclude:
+                continue
+            cfg = pump_cfgs.get(name)
+            if cfg is None or not cfg.enabled or row.mode != "auto":
+                continue
+            if row.phase in self._FLEET_ACTIVE_PHASES:
+                candidates.append(row)
+        if not candidates:
+            return None
+        return max(
+            candidates,
+            key=lambda row: (
+                row.device_on,
+                phase_rank.get(row.phase, 0),
+                _as_utc(row.updated_at) if row.updated_at else datetime.min.replace(tzinfo=UTC),
+            ),
+        )
+
+    def _apply_fleet_reference_to_row(
+        self,
+        row: PumpStateRow,
+        reference: PumpStateRow,
+    ) -> None:
+        """Copy auto-program phase context; leave device_on False so eval commands hardware."""
+        now = datetime.now(UTC)
+        row.phase = reference.phase
+        row.duty_on = reference.duty_on
+        row.device_on = False
+        row.duty_cycle_started_at = reference.duty_cycle_started_at
+        row.post_rain_drain_started_at = reference.post_rain_drain_started_at
+        row.sensor_dry_since = reference.sensor_dry_since
+        row.updated_at = now
+
+    def sync_new_pumps_to_fleet(self, new_names: list[str]) -> dict[str, Any]:
+        """Align newly added auto pumps with the current fleet auto program."""
+        if not new_names:
+            return {"synced": [], "reason": "no new pumps"}
+
+        pump_cfgs = {p.name: p for p in self.config.pumps}
+        with self.session_factory() as session:
+            rows = {r.name: r for r in session.scalars(select(PumpStateRow)).all()}
+            reference = self._pick_fleet_reference(rows, exclude=set(new_names))
+            if reference is None:
+                return {
+                    "synced": [],
+                    "reason": "fleet idle (no active auto program to copy)",
+                }
+
+            synced: list[str] = []
+            for name in new_names:
+                row = rows.get(name)
+                cfg = pump_cfgs.get(name)
+                if row is None or cfg is None or not cfg.enabled or row.mode != "auto":
+                    continue
+                self._apply_fleet_reference_to_row(row, reference)
+                synced.append(name)
+
+            ref_name = reference.name
+            ref_phase = reference.phase
+            ref_device_on = reference.device_on
+
+            if synced:
+                session.commit()
+
+        if synced:
+            self._log_event(
+                None,
+                "device_fleet_sync",
+                f"synced {len(synced)} new pump(s) to fleet program ({ref_phase})",
+                details={
+                    "synced": synced,
+                    "reference_pump": ref_name,
+                    "reference_phase": ref_phase,
+                    "reference_device_on": ref_device_on,
+                },
+            )
+
+        return {
+            "synced": synced,
+            "reference_pump": ref_name,
+            "reference_phase": ref_phase,
+            "reference_device_on": ref_device_on,
+        }
+
+    def find_out_of_sync_pumps(self) -> list[str]:
+        """Auto pumps still idle while the rest of the fleet is in an active auto phase."""
+        pump_cfgs = {p.name: p for p in self.config.pumps}
+        with self.session_factory() as session:
+            rows = {r.name: r for r in session.scalars(select(PumpStateRow)).all()}
+            reference = self._pick_fleet_reference(rows)
+            if reference is None:
+                return []
+            out_of_sync: list[str] = []
+            for name, row in rows.items():
+                cfg = pump_cfgs.get(name)
+                if cfg is None or not cfg.enabled or row.mode != "auto":
+                    continue
+                if row.phase == "idle" and reference.phase in self._FLEET_ACTIVE_PHASES:
+                    out_of_sync.append(name)
+            return out_of_sync
+
+    async def sync_pumps_to_fleet(
+        self,
+        pump_names: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Sync selected (or all out-of-sync) auto pumps to the current fleet program."""
+        targets = pump_names if pump_names is not None else self.find_out_of_sync_pumps()
+        if not targets:
+            return {"synced": [], "reason": "no pumps need fleet sync"}
+        result = self.sync_new_pumps_to_fleet(targets)
+        await self._wait_for_new_meross_devices(targets)
+        if result.get("synced"):
+            await self.run_evaluation()
+        return result
+
+    async def _wait_for_new_meross_devices(self, pump_names: list[str]) -> None:
+        if not pump_names or not self.meross_session.configured:
+            return
+        name_set = set(pump_names)
+        meross_uuids = {
+            p.meross.device_uuid.strip()
+            for p in self.config.pumps
+            if p.name in name_set and p.meross.device_uuid.strip()
+        }
+        if not meross_uuids:
+            return
+        if not self.meross_session.started:
+            try:
+                await self.meross_session.startup()
+            except Exception:
+                logger.exception("meross startup failed before waiting for new devices")
+                return
+        try:
+            enrolled = await self.meross_session.wait_for_devices(meross_uuids)
+            missing = sorted(uuid for uuid, ok in enrolled.items() if not ok)
+            if missing:
+                logger.warning(
+                    "meross devices not enrolled after import: %s",
+                    ", ".join(f"{uuid[:8]}…" for uuid in missing),
+                )
+        except Exception:
+            logger.exception("meross wait_for_devices failed after import")
 
     def _get_pump_row(self, name: str) -> PumpStateRow | None:
         with self.session_factory() as session:
             return session.get(PumpStateRow, name)
 
-    async def reconcile_devices(self) -> None:
+    async def reconcile_devices(self, *, exclude: set[str] | None = None) -> None:
         """Startup reconciliation: device wins for device_on; sync hardware to DB intent."""
+        skip = exclude or set()
         for pump_cfg in self.config.pumps:
+            if pump_cfg.name in skip:
+                continue
             device = self.devices.get(pump_cfg.name)
             if not device:
                 continue
@@ -483,6 +680,51 @@ class PumpService:
                             )
                             session.commit()
 
+    async def poll_current_conditions(self) -> None:
+        if self.rain_simulation.active:
+            logger.debug("skipping poll_current_conditions during rain simulation")
+            return
+
+        provider_name = self.config.weather.display_provider
+        provider = self.weather_providers.get(provider_name)
+        if provider is None:
+            return
+
+        fetch_current = getattr(provider, "fetch_current", None)
+        if fetch_current is None:
+            return
+
+        lat = self.config.location.latitude
+        lon = self.config.location.longitude
+        now = datetime.now(UTC)
+        try:
+            current = await fetch_current(lat, lon)
+            with self.session_factory() as session:
+                self._update_provider_health(session, provider_name, ok=True)
+                row = session.get(WeatherCurrentRow, 1)
+                if not row:
+                    row = WeatherCurrentRow(id=1)
+                    session.add(row)
+                row.temp_c = current.temp_c
+                row.humidity_pct = current.humidity_pct
+                row.weather_code = current.weather_code
+                row.precipitation_mm = current.precipitation_mm
+                row.rain_mm = current.rain_mm
+                row.is_day = current.is_day
+                row.fetched_at = current.fetched_at or now
+                row.provider = current.provider or provider_name
+                row.has_precipitation = current.has_precipitation
+                row.weather_text = current.weather_text
+                session.commit()
+        except Exception as exc:
+            logger.exception("current conditions fetch failed for %s", provider_name)
+            with self.session_factory() as session:
+                self._update_provider_health(session, provider_name, ok=False, error=str(exc))
+                session.commit()
+            return
+
+        await self.run_evaluation()
+
     async def poll_forecasts(self) -> None:
         if self.rain_simulation.active:
             logger.debug("skipping poll_forecasts during rain simulation")
@@ -493,7 +735,7 @@ class PumpService:
         now = datetime.now(UTC)
 
         for name in self.config.weather.providers:
-            provider = PROVIDERS.get(name)
+            provider = self.weather_providers.get(name)
             if not provider:
                 continue
             try:
@@ -535,12 +777,13 @@ class PumpService:
             logger.info("stored forecasts from %d providers", len(all_forecasts))
             await self.run_evaluation()
 
-        await self._poll_display_weather(lat, lon)
+        await self._poll_display_daily(lat, lon)
 
-    async def _poll_display_weather(self, lat: float, lon: float) -> None:
+    async def _poll_display_daily(self, lat: float, lon: float) -> None:
+        """Fetch 7-day outlook from Open-Meteo (display only)."""
         provider = OpenMeteoProvider()
         try:
-            current, daily = await provider.fetch_display(
+            _current, daily = await provider.fetch_display(
                 lat, lon, timezone=self.config.timezone
             )
         except Exception:
@@ -549,19 +792,6 @@ class PumpService:
 
         now = datetime.now(UTC)
         with self.session_factory() as session:
-            if current:
-                row = session.get(WeatherCurrentRow, 1)
-                if not row:
-                    row = WeatherCurrentRow(id=1)
-                    session.add(row)
-                row.temp_c = current.temp_c
-                row.humidity_pct = current.humidity_pct
-                row.weather_code = current.weather_code
-                row.precipitation_mm = current.precipitation_mm
-                row.rain_mm = current.rain_mm
-                row.is_day = current.is_day
-                row.fetched_at = now
-
             session.execute(delete(WeatherDailyRow))
             for day in daily:
                 session.add(
@@ -593,6 +823,7 @@ class PumpService:
         )
         self.config.location = loc
         save_location(self.config_path, loc)
+        await self.poll_current_conditions()
         await self.poll_forecasts()
         return loc
 
@@ -826,7 +1057,7 @@ class PumpService:
                 raise ValueError(f"unknown pump: {name}")
             pump_labels[name] = (label or "").strip()
 
-        label_rows: list[DeviceLabelOverride] = []
+        merged_device_labels = dict(device_labels_map(self.config))
         seen_devices: set[str] = set()
         for key, label in device_labels.items():
             if ":" not in key:
@@ -834,8 +1065,21 @@ class PumpService:
             backend, device_id = key.split(":", 1)
             if not backend or not device_id:
                 continue
-            cleaned = (label or "").strip()
             seen_devices.add(key)
+            cleaned = (label or "").strip()
+            if cleaned:
+                merged_device_labels[key] = cleaned
+            else:
+                merged_device_labels.pop(key, None)
+
+        label_rows: list[DeviceLabelOverride] = []
+        for key, label in merged_device_labels.items():
+            if ":" not in key:
+                continue
+            backend, device_id = key.split(":", 1)
+            if not backend or not device_id:
+                continue
+            cleaned = (label or "").strip()
             if cleaned:
                 label_rows.append(
                     DeviceLabelOverride(
@@ -851,10 +1095,18 @@ class PumpService:
             device_labels=label_rows,
         )
         self._reload_config()
+        self._meross_ui_cache_at = 0.0
 
         cloud_results: list[dict[str, Any]] = []
+        trace: list[dict[str, Any]] = []
+
+        def record_trace(entry: dict[str, Any]) -> None:
+            trace.append(entry)
+            logger.info("display_name_cloud %s", json.dumps(entry, default=str))
+
         if not propagate_cloud:
-            return {"saved": True, "cloud": cloud_results}
+            record_trace({"step": "skipped", "reason": "propagate_cloud=false"})
+            return {"saved": True, "cloud": cloud_results, "trace": trace}
 
         pumps_by_device: dict[str, list[PumpConfig]] = {}
         for pump in self.config.pumps:
@@ -874,11 +1126,19 @@ class PumpService:
                 continue
             backend, device_id = key.split(":", 1)
             result = await self._propagate_device_label(backend, device_id, cleaned)
-            cloud_results.append(
+            cloud_entry = {
+                "kind": "device",
+                "device_backend": backend,
+                "device_id": device_id,
+                **result,
+            }
+            cloud_results.append(cloud_entry)
+            record_trace(
                 {
-                    "kind": "device",
-                    "device_backend": backend,
+                    "step": "device_rename",
+                    "backend": backend,
                     "device_id": device_id,
+                    "label": cleaned,
                     **result,
                 }
             )
@@ -888,14 +1148,26 @@ class PumpService:
             if not cleaned:
                 continue
             pump = next(p for p in self.config.pumps if p.name == name)
-            result = await self._propagate_switch_label(pump, cleaned)
             device_key = None
+            backend = None
+            device_id = None
+            channel: int | None = None
+            switch_code: str | None = None
             if pump.meross.device_uuid:
-                device_key = device_label_key("meross", pump.meross.device_uuid)
+                backend = "meross"
+                device_id = pump.meross.device_uuid
+                channel = pump.meross.channel
+                device_key = device_label_key("meross", device_id)
             elif pump.tuya.device_id:
-                device_key = device_label_key("tuya", pump.tuya.device_id)
+                backend = "tuya"
+                device_id = pump.tuya.device_id
+                switch_code = pump.tuya.switch_code or "switch_1"
+                device_key = device_label_key("tuya", device_id)
             elif pump.smartthings.device_id:
-                device_key = device_label_key("smartthings", pump.smartthings.device_id)
+                backend = "smartthings"
+                device_id = pump.smartthings.device_id
+                device_key = device_label_key("smartthings", device_id)
+
             skip_switch = (
                 device_key is not None
                 and device_key in device_labels
@@ -903,16 +1175,58 @@ class PumpService:
                 and device_labels.get(device_key, "").strip() == cleaned
             )
             if skip_switch:
+                record_trace(
+                    {
+                        "step": "switch_skipped",
+                        "pump_name": name,
+                        "backend": backend,
+                        "device_id": device_id,
+                        "channel": channel,
+                        "switch_code": switch_code,
+                        "label": cleaned,
+                        "skipped": True,
+                        "skip_reason": (
+                            "single-outlet device; device rename already covers this switch"
+                        ),
+                    }
+                )
                 continue
-            cloud_results.append(
+
+            result = await self._propagate_switch_label(pump, cleaned)
+            cloud_entry = {
+                "kind": "switch",
+                "pump_name": name,
+                **result,
+            }
+            cloud_results.append(cloud_entry)
+            record_trace(
                 {
-                    "kind": "switch",
+                    "step": "switch_rename",
                     "pump_name": name,
+                    "backend": backend,
+                    "device_id": device_id,
+                    "channel": channel,
+                    "switch_code": switch_code,
+                    "label": cleaned,
                     **result,
                 }
             )
 
-        return {"saved": True, "cloud": cloud_results}
+        pushed = sum(1 for entry in trace if entry.get("success") is True)
+        failed = sum(
+            1
+            for entry in trace
+            if entry.get("step") in ("device_rename", "switch_rename")
+            and entry.get("success") is False
+        )
+        self._log_event(
+            None,
+            "display_name_cloud",
+            f"display name cloud push: {pushed} ok, {failed} failed",
+            details={"trace": trace, "cloud": cloud_results},
+        )
+
+        return {"saved": True, "cloud": cloud_results, "trace": trace}
 
     async def _propagate_device_label(
         self, backend: str, device_id: str, label: str
@@ -960,7 +1274,7 @@ class PumpService:
         pumps: list[PumpConfig],
         *,
         mode: str = "merge",
-    ) -> list[PumpConfig]:
+    ) -> dict[str, Any]:
         saved = save_pumps(self.config_path, pumps, mode=mode)  # type: ignore[arg-type]
         self.config.pumps = saved
         self._build_devices()
@@ -972,16 +1286,20 @@ class PumpService:
                     await self.meross_session.startup()
                 except Exception:
                     logger.exception("failed to initialize Meross cloud session after import")
-        self._ensure_pump_rows()
+        new_names = self._ensure_pump_rows()
         self._log_event(
             None,
             "device_import",
             f"imported {len(saved)} pump(s)",
-            details={"pumps": [p.name for p in saved], "mode": mode},
+            details={"pumps": [p.name for p in saved], "mode": mode, "new_pumps": new_names},
         )
         await self.refresh_meross_ui_state(force=True)
-        await self.reconcile_devices()
-        return saved
+        await self.reconcile_devices(exclude=set(new_names))
+        fleet_sync = self.sync_new_pumps_to_fleet(new_names)
+        await self._wait_for_new_meross_devices(new_names)
+        if fleet_sync.get("synced"):
+            await self.run_evaluation()
+        return {"pumps": saved, "new_pumps": new_names, "fleet_sync": fleet_sync}
 
     async def clear_all_local_devices(self) -> dict[str, Any]:
         """Remove every pump from local config and SQLite — cloud accounts unchanged."""
@@ -1044,12 +1362,16 @@ class PumpService:
         all_names = [p.name for p in self.config.pumps]
 
         if use_cache_only:
-            if self._online_probe_cache is not None:
+            if (
+                self._online_probe_cache is not None
+                and now - self._online_probe_cache_at < ttl
+            ):
                 return self._online_probe_cache
-            return {
-                name: {"status": "unknown", "detail": "not probed yet"}
-                for name in all_names
-            }
+            if self._online_probe_cache is None:
+                return {
+                    name: {"status": "unknown", "detail": "not probed yet"}
+                    for name in all_names
+                }
 
         if names is None:
             if (
@@ -1192,6 +1514,131 @@ class PumpService:
         self._sync_probe_switch_states(online_map)
         return online_map
 
+    async def start_manual_drain(self) -> dict[str, Any]:
+        """User-initiated post-rain drain for remaining roof puddles."""
+        now = datetime.now(UTC)
+        self._ensure_pump_rows()
+        started: list[str] = []
+        skipped: list[dict[str, str]] = []
+        commands: list[PumpCommand] = []
+
+        with self.session_factory() as session:
+            for cfg in self.config.pumps:
+                if not cfg.enabled:
+                    skipped.append({"name": cfg.name, "reason": "disabled"})
+                    continue
+                row = session.get(PumpStateRow, cfg.name)
+                if row is None:
+                    skipped.append({"name": cfg.name, "reason": "missing state"})
+                    continue
+                if row.mode == "manual_off":
+                    skipped.append({"name": cfg.name, "reason": "manual_off"})
+                    continue
+                if row.mode == "manual_on":
+                    skipped.append({"name": cfg.name, "reason": "manual_on"})
+                    continue
+
+                row.phase = "post_rain_drain"
+                row.post_rain_drain_started_at = now
+                row.sensor_dry_since = None
+                started.append(cfg.name)
+                if not row.device_on:
+                    commands.append(
+                        PumpCommand(
+                            pump_name=cfg.name,
+                            action="turn_on",
+                            reason="user started post-rain drain",
+                            new_phase="post_rain_drain",
+                            notify=True,
+                        )
+                    )
+            session.commit()
+
+        drain_minutes = self.config.rules.post_rain_drain_minutes
+        if started:
+            self._log_event(
+                None,
+                "manual_drain_start",
+                f"User started post-rain drain for {len(started)} pump(s)",
+                details={"pumps": started, "skipped": skipped, "drain_minutes": drain_minutes},
+            )
+            if commands:
+                await self._execute_commands(commands)
+            await self.run_evaluation()
+            message = (
+                f"Draining {len(started)} pump(s) for up to {drain_minutes} min"
+            )
+        else:
+            message = "No pumps available to drain (manual mode or disabled)"
+
+        return {
+            "started": started,
+            "skipped": skipped,
+            "drain_minutes": drain_minutes,
+            "commands_sent": len(commands),
+            "message": message,
+        }
+
+    async def revert_all_to_auto(self) -> dict[str, Any]:
+        """Return all enabled pumps from manual mode to automatic control."""
+        self._ensure_pump_rows()
+        reverted: list[str] = []
+        already_auto: list[str] = []
+        skipped: list[dict[str, str]] = []
+
+        with self.session_factory() as session:
+            for cfg in self.config.pumps:
+                if not cfg.enabled:
+                    skipped.append({"name": cfg.name, "reason": "disabled"})
+                    continue
+                row = session.get(PumpStateRow, cfg.name)
+                if row is None:
+                    skipped.append({"name": cfg.name, "reason": "missing state"})
+                    continue
+                if row.mode == "auto":
+                    already_auto.append(cfg.name)
+                    continue
+                if row.mode not in ("manual_on", "manual_off"):
+                    skipped.append({"name": cfg.name, "reason": row.mode})
+                    continue
+                previous_mode = row.mode
+                row.mode = "auto"
+                row.manual_revert_at = None
+                row.manual_context_json = None
+                row.safety_override_approved = False
+                reverted.append(cfg.name)
+                self._log_event(
+                    cfg.name,
+                    "mode_change",
+                    "mode set to auto",
+                    details={"mode": "auto", "previous_mode": previous_mode, "source": "user_auto_button"},
+                )
+            session.commit()
+
+        for name in reverted:
+            self._cancel_manual_revert_task(name)
+
+        if reverted:
+            self._log_event(
+                None,
+                "manual_revert_all",
+                f"User returned {len(reverted)} pump(s) to automatic control",
+                details={"pumps": reverted, "already_auto": already_auto, "skipped": skipped},
+            )
+            await self.run_evaluation()
+            message = f"Automatic control restored for {len(reverted)} pump(s)"
+        elif already_auto:
+            message = "All pumps are already in automatic mode"
+        else:
+            message = "No pumps available to restore to automatic mode"
+
+        return {
+            "reverted": reverted,
+            "already_auto": already_auto,
+            "skipped": skipped,
+            "message": message,
+        }
+
     def _sync_probe_switch_states(self, online_map: dict[str, dict[str, str]]) -> None:
         """Persist live switch ON/OFF from a forced cloud probe into pump state."""
         for name, entry in online_map.items():
@@ -1235,18 +1682,20 @@ class PumpService:
 
     async def get_pump_cards(self, *, refresh_cloud: bool = False) -> list[dict[str, Any]]:
         """Pump rows enriched with live online status for dashboard cards."""
+        self._reload_config_if_changed()
         if refresh_cloud:
             await self.refresh_meross_ui_state(force=False)
         with self.session_factory() as session:
             rows = session.scalars(select(PumpStateRow)).all()
             state_by_name = {row.name: row for row in rows}
-        online_map = await self.probe_pumps_online(use_cache_only=True)
+        online_map = await self.probe_pumps_online(use_cache_only=False)
         hw_map = {h["component_id"]: h for h in self.hardware.status_summary()}
         device_labels = device_labels_map(self.config)
         cards: list[dict[str, Any]] = []
         for cfg in self.config.pumps:
             row = state_by_name.get(cfg.name)
             online = online_map.get(cfg.name, {"status": "unknown", "detail": ""})
+            online_status = online.get("status", "unknown")
             hw = hw_map.get(cfg.name)
             switch_code = (
                 cfg.meross.switch_code or f"switch_{cfg.meross.channel + 1}"
@@ -1272,11 +1721,15 @@ class PumpService:
             manual_revert_at = _as_utc(row.manual_revert_at) if row and row.manual_revert_at else None
             mode = row.mode if row else "auto"
             device_on = row.device_on if row else False
-            live_on = parse_probe_switch_state(online.get("detail", ""))
-            if live_on is not None:
-                if mode == "auto" and live_on != device_on:
-                    self._sync_live_device_on(cfg.name, live_on)
-                device_on = live_on
+            if online_status == "online":
+                live_on = parse_probe_switch_state(online.get("detail", ""))
+                if live_on is not None:
+                    if mode == "auto" and live_on != device_on:
+                        self._sync_live_device_on(cfg.name, live_on)
+                    device_on = live_on
+            elif online_status in ("offline", "cloud_error"):
+                # Unreachable — don't show a stale ON from DB or old probe cache.
+                device_on = False
             cards.append(
                 {
                     "name": cfg.name,
@@ -2477,6 +2930,9 @@ class PumpService:
             rain_mm=row.rain_mm,
             is_day=row.is_day,
             fetched_at=_as_utc(row.fetched_at),
+            weather_text=row.weather_text or "",
+            has_precipitation=bool(row.has_precipitation),
+            provider=row.provider or "",
         )
 
     def get_status(self) -> dict[str, Any]:

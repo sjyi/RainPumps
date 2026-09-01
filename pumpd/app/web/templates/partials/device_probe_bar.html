@@ -1,4 +1,16 @@
 <div class="device-probe-bar">
   <button type="button" class="mode-btn probe-devices-btn">Check device connections</button>
+  {% if show_drain_button %}
+  <button type="button"
+          class="mode-btn auto-mode-btn"
+          title="Return all pumps to automatic rain control">
+    Auto
+  </button>
+  <button type="button"
+          class="mode-btn drain-puddles-btn"
+          title="Run post-rain drain to clear remaining roof puddles">
+    Drain
+  </button>
+  {% endif %}
   <span class="probe-devices-status meta" aria-live="polite"></span>
 </div>

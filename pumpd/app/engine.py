@@ -25,7 +25,7 @@ class RainState:
     is_raining: bool
     rate_mm_h: float
     confidence: float
-    source: Literal["forecast", "mqtt"]
+    source: Literal["forecast", "mqtt", "observation"]
     ts: datetime
     water_present: bool | None = None  # Phase 2 float switch
 
@@ -174,7 +174,11 @@ def _safety_trip(
 ) -> tuple[bool, str]:
     if safety.engine_watchdog:
         return True, "engine evaluation watchdog"
-    if safety.stale_forecast and not safety.mqtt_stale_override:
+    if (
+        safety.stale_forecast
+        and not safety.mqtt_stale_override
+        and pump.phase != "post_rain_drain"
+    ):
         return True, "stale forecast watchdog"
     if pump.runtime_continuous_min >= max_runtime_minutes and pump.device_on:
         return True, f"max runtime {max_runtime_minutes}min exceeded"

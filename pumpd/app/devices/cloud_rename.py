@@ -128,13 +128,19 @@ async def rename_meross_switch(
         info = next((d for d in devices if getattr(d, "uuid", "") == device_uuid), None)
         if info is None:
             return {"success": False, "message": "device not found in Meross cloud"}
-        return await session.update_cloud_switch_name(
+        device_type = str(getattr(info, "device_type", "") or "")
+        result = await session.update_cloud_switch_name(
             device_uuid,
             channel,
             name,
-            device_type=str(getattr(info, "device_type", "") or ""),
+            device_type=device_type,
             channels=getattr(info, "channels", None),
         )
+        return {
+            **result,
+            "device_type": device_type,
+            "meross_channel": channel,
+        }
     except Exception as exc:
         logger.debug(
             "meross switch rename failed for %s ch%s: %s",

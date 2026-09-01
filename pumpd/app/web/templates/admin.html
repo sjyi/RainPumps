@@ -340,12 +340,37 @@
     justify-content: center;
   }
   .name-edit-toggle:hover { background: #f9fafb; }
+  .name-edit-toggle-inline {
+    width: 1.75rem;
+    height: 1.75rem;
+  }
+  .name-cancel-edit {
+    display: none;
+    flex-shrink: 0;
+    margin: 0;
+    padding: 0.35rem 0.65rem;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    background: #fff;
+    color: #374151;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .name-cancel-edit:hover { background: #f9fafb; }
+  .name-editing-badge {
+    display: none;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #1d4ed8;
+  }
   .name-edit-scope .name-edit-control { display: none; }
   .name-edit-scope .name-save-row { display: none; }
   .name-edit-scope.is-name-editing .name-edit-control { display: flex; }
   .name-edit-scope.is-name-editing .name-save-row { display: flex; }
   .name-edit-scope.is-name-editing .name-display-value { display: none; }
   .name-edit-scope.is-name-editing .name-edit-toggle { display: none; }
+  .name-edit-scope.is-name-editing .name-cancel-edit { display: inline-flex; }
+  .name-edit-scope.is-name-editing .name-editing-badge { display: inline; }
   .name-edit-scope.is-name-editing .name-view-row .name-edit-label { display: none; }
   .name-edit-scope.is-name-editing .device-name-subtitle { display: none; }
   .name-edit-field { display: flex; flex-direction: column; gap: 0.2rem; flex: 1; min-width: 160px; }
@@ -384,6 +409,18 @@
   .names-cloud-result { font-size: 0.8rem; margin: 0.35rem 0 0; padding-left: 1.1rem; width: 100%; }
   .names-cloud-result li.ok { color: #065f46; }
   .names-cloud-result li.fail { color: #991b1b; }
+  .names-cloud-trace { font-size: 0.75rem; margin: 0.35rem 0 0; width: 100%; }
+  .names-cloud-trace pre {
+    margin: 0.35rem 0 0;
+    padding: 0.5rem;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    max-height: 14rem;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
   .device-order-list {
     list-style: none;
     margin: 0.75rem 0 0;
@@ -825,9 +862,11 @@ document.body.dataset.commandWaitHintMs = '{{ ((config.api.device_command_timeou
   <p class="meta">
     Discover switches from SmartThings, Tuya, and Meross. Use <strong>Sync all devices</strong> to
     discover and import everything into <code>config.yaml</code> in one step, or pick devices manually below.
+    New pumps are automatically aligned with the current auto program when other pumps are running.
   </p>
   <div class="import-toolbar">
     <button type="button" class="primary" id="auto-import-devices-btn">Sync all devices</button>
+    <button type="button" id="sync-fleet-btn">Sync pumps to auto program</button>
     <button type="button" id="discover-devices-btn">Discover only</button>
     <label class="btn" style="cursor:pointer;margin:0;">
       Upload wizard JSON
@@ -1376,29 +1415,114 @@ document.body.dataset.commandWaitHintMs = '{{ ((config.api.device_command_timeou
 <script>
 (function() {
   var NAME_DRAFTS_KEY = 'pumpdAdminNameDrafts';
-  var NAME_EDITING_KEY = 'pumpdAdminNameEditing';
+  var CLOUD_RESULT_KEY = 'pumpdAdminCloudResult';
 
   function findNameScope(node) {
     return node.closest('.name-edit-scope');
   }
 
-  function getEditingKeys() {
+  function clearAllNameEditingState() {
     try {
-      return JSON.parse(sessionStorage.getItem(NAME_EDITING_KEY) || '[]');
-    } catch (_) {
-      return [];
+      sessionStorage.removeItem('pumpdAdminNameEditing');
+      sessionStorage.removeItem(NAME_DRAFTS_KEY);
+    } catch (_) {}
+  }
+
+  function storeCloudResult(scopeKey, data, statusText) {
+    if (!scopeKey || !data) return;
+    try {
+      sessionStorage.setItem(CLOUD_RESULT_KEY, JSON.stringify({
+        scopeKey: scopeKey,
+        at: Date.now(),
+        cloud: data.cloud || [],
+        trace: data.trace || [],
+        statusText: statusText || '',
+      }));
+    } catch (_) {}
+  }
+
+  function renderCloudResults(scope, payload) {
+    if (!scope || !payload) return;
+    var statusEl = scope.querySelector('.name-save-status');
+    var cloudEl = scope.querySelector('.names-cloud-result');
+    var traceEl = scope.querySelector('.names-cloud-trace');
+    if (statusEl && payload.statusText) {
+      statusEl.textContent = payload.statusText;
+    }
+    if (cloudEl) {
+      cloudEl.hidden = true;
+      cloudEl.innerHTML = '';
+      if (Array.isArray(payload.cloud) && payload.cloud.length) {
+        cloudEl.hidden = false;
+        payload.cloud.forEach(function(item) {
+          var li = document.createElement('li');
+          li.className = item.success ? 'ok' : 'fail';
+          var target = item.kind === 'device'
+            ? ((item.device_backend || '') + ' device')
+            : ('switch ' + (item.pump_name || ''));
+          var detail = item.message || (item.success ? 'updated' : 'failed');
+          if (item.api_path) detail += ' [' + item.api_path + ']';
+          if (item.channel != null) detail += ' (channel ' + item.channel + ')';
+          li.textContent = target + ': ' + detail;
+          cloudEl.appendChild(li);
+        });
+      }
+    }
+    if (traceEl) {
+      traceEl.hidden = true;
+      traceEl.innerHTML = '';
+      if (Array.isArray(payload.trace) && payload.trace.length) {
+        traceEl.hidden = false;
+        var summary = document.createElement('summary');
+        summary.textContent = 'Cloud push trace (' + payload.trace.length + ' step(s))';
+        traceEl.appendChild(summary);
+        var pre = document.createElement('pre');
+        pre.textContent = JSON.stringify(payload.trace, null, 2);
+        traceEl.appendChild(pre);
+      }
     }
   }
 
-  function setEditingKey(key, editing) {
-    if (!key) return;
-    var keys = getEditingKeys();
-    var idx = keys.indexOf(key);
-    if (editing && idx < 0) keys.push(key);
-    if (!editing && idx >= 0) keys.splice(idx, 1);
+  function restoreCloudResult(root) {
+    if (!root) return;
+    var raw;
     try {
-      sessionStorage.setItem(NAME_EDITING_KEY, JSON.stringify(keys));
-    } catch (_) {}
+      raw = sessionStorage.getItem(CLOUD_RESULT_KEY);
+    } catch (_) {
+      return;
+    }
+    if (!raw) return;
+    var saved;
+    try {
+      saved = JSON.parse(raw);
+    } catch (_) {
+      return;
+    }
+    if (!saved.scopeKey || Date.now() - (saved.at || 0) > 10 * 60 * 1000) {
+      try { sessionStorage.removeItem(CLOUD_RESULT_KEY); } catch (_) {}
+      return;
+    }
+    var scope = root.querySelector('.name-edit-scope[data-name-edit-key="' + saved.scopeKey + '"]');
+    if (!scope) return;
+    renderCloudResults(scope, saved);
+  }
+
+  function scopeHasDrafts(scope, drafts) {
+    var deviceInputs = scope.querySelectorAll('.device-label-input');
+    for (var i = 0; i < deviceInputs.length; i++) {
+      var deviceKey = deviceInputs[i].dataset.deviceKey;
+      if (deviceKey && Object.prototype.hasOwnProperty.call(drafts, 'd:' + deviceKey)) {
+        return true;
+      }
+    }
+    var switchInputs = scope.querySelectorAll('.switch-label-input');
+    for (var j = 0; j < switchInputs.length; j++) {
+      var pumpName = switchInputs[j].dataset.pumpName;
+      if (pumpName && Object.prototype.hasOwnProperty.call(drafts, 's:' + pumpName)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   function setInputsEnabled(scope, enabled) {
@@ -1419,33 +1543,34 @@ document.body.dataset.commandWaitHintMs = '{{ ((config.api.device_command_timeou
     scope.querySelectorAll('.switch-label-input').forEach(function(input) {
       var name = input.dataset.pumpName;
       if (!name) return;
+      var value = String(input.value || '').trim();
       var display = scope.querySelector('.switch-name-display[data-pump-name="' + name + '"]');
       if (!display) {
         display = scope.querySelector('.pump-title-display');
       }
-      if (!display) return;
-      var value = String(input.value || '').trim();
-      display.textContent = value || display.dataset.fallback || '—';
+      if (display) {
+        display.textContent = value || display.dataset.fallback || '—';
+      }
+      var circuitLabel = scope.querySelector('.pump-device-circuit-label[data-pump-name="' + name + '"]');
+      if (circuitLabel) {
+        circuitLabel.textContent = value || circuitLabel.dataset.fallback || '—';
+      }
     });
   }
 
   function enterNameEditMode(scope) {
     if (!scope) return;
-    var key = scope.dataset.nameEditKey;
     scope.classList.add('is-name-editing');
     setInputsEnabled(scope, true);
-    setEditingKey(key, true);
     var first = scope.querySelector('.name-edit-control input[type="text"]:not([disabled])');
     if (first) first.focus();
   }
 
   function exitNameEditMode(scope) {
     if (!scope) return;
-    var key = scope.dataset.nameEditKey;
     syncDisplayValues(scope);
     scope.classList.remove('is-name-editing');
     setInputsEnabled(scope, false);
-    setEditingKey(key, false);
   }
 
   function captureNameDrafts(root) {
@@ -1486,27 +1611,22 @@ document.body.dataset.commandWaitHintMs = '{{ ((config.api.device_command_timeou
     });
   }
 
-  function applyNameEditingState(root) {
-    if (!root) return;
-    var editing = getEditingKeys();
-    root.querySelectorAll('.name-edit-scope').forEach(function(scope) {
-      var key = scope.dataset.nameEditKey;
-      if (key && editing.indexOf(key) >= 0) {
-        scope.classList.add('is-name-editing');
-        setInputsEnabled(scope, true);
-      } else {
-        scope.classList.remove('is-name-editing');
-        setInputsEnabled(scope, false);
-      }
-    });
-  }
-
   function initNameEditScopes(root) {
     if (!root) root = document.getElementById('status-panel');
     if (!root) return;
-    applyNameEditingState(root);
+    var drafts = {};
+    try {
+      drafts = JSON.parse(sessionStorage.getItem(NAME_DRAFTS_KEY) || '{}');
+    } catch (_) {}
     applyNameDrafts(root);
-    root.querySelectorAll('.name-edit-scope:not(.is-name-editing)').forEach(syncDisplayValues);
+    root.querySelectorAll('.name-edit-scope').forEach(function(scope) {
+      if (scopeHasDrafts(scope, drafts)) {
+        enterNameEditMode(scope);
+      } else {
+        exitNameEditMode(scope);
+      }
+    });
+    restoreCloudResult(root);
   }
 
   document.body.addEventListener('htmx:beforeSwap', function(evt) {
@@ -1526,6 +1646,16 @@ document.body.dataset.commandWaitHintMs = '{{ ((config.api.device_command_timeou
       return;
     }
 
+    var cancelBtn = ev.target.closest('.name-cancel-edit');
+    if (cancelBtn) {
+      var cancelScope = findNameScope(cancelBtn);
+      if (cancelScope) {
+        clearAllNameEditingState();
+        exitNameEditMode(cancelScope);
+      }
+      return;
+    }
+
     var saveBtn = ev.target.closest('.save-device-names-btn');
     if (!saveBtn) return;
     ev.preventDefault();
@@ -1538,8 +1668,8 @@ document.body.dataset.commandWaitHintMs = '{{ ((config.api.device_command_timeou
 
     var statusEl = scope.querySelector('.name-save-status');
     var cloudEl = scope.querySelector('.names-cloud-result');
+    var traceEl = scope.querySelector('.names-cloud-trace');
     var propagateEl = scope.querySelector('.propagate-cloud-toggle');
-    var editKey = scope.dataset.nameEditKey;
 
     var devices = {};
     scope.querySelectorAll('.device-label-input').forEach(function(input) {
@@ -1556,6 +1686,10 @@ document.body.dataset.commandWaitHintMs = '{{ ((config.api.device_command_timeou
     if (cloudEl) {
       cloudEl.hidden = true;
       cloudEl.innerHTML = '';
+    }
+    if (traceEl) {
+      traceEl.hidden = true;
+      traceEl.innerHTML = '';
     }
 
     var resp = await fetch('/api/config/names', {
@@ -1574,26 +1708,29 @@ document.body.dataset.commandWaitHintMs = '{{ ((config.api.device_command_timeou
     }
 
     var data = await resp.json();
-    if (statusEl) statusEl.textContent = 'Saved';
-    try {
-      sessionStorage.removeItem(NAME_DRAFTS_KEY);
-      setEditingKey(editKey, false);
-    } catch (_) {}
+    var statusText = 'Saved';
+    var cloudFailures = 0;
 
-    exitNameEditMode(scope);
-
-    if (cloudEl && Array.isArray(data.cloud) && data.cloud.length) {
-      cloudEl.hidden = false;
+    if (Array.isArray(data.cloud) && data.cloud.length) {
       data.cloud.forEach(function(item) {
-        var li = document.createElement('li');
-        li.className = item.success ? 'ok' : 'fail';
-        var target = item.kind === 'device'
-          ? ((item.device_backend || '') + ' device')
-          : ('switch ' + (item.pump_name || ''));
-        li.textContent = target + ': ' + (item.message || (item.success ? 'updated' : 'failed'));
-        cloudEl.appendChild(li);
+        if (!item.success) cloudFailures += 1;
       });
+      if (cloudFailures > 0) {
+        statusText = 'Saved locally; ' + cloudFailures + ' cloud update(s) failed';
+      } else {
+        statusText = 'Saved and pushed to cloud';
+      }
     }
+
+    renderCloudResults(scope, {
+      cloud: data.cloud,
+      trace: data.trace,
+      statusText: statusText,
+    });
+    storeCloudResult(scope.dataset.nameEditKey, data, statusText);
+
+    clearAllNameEditingState();
+    exitNameEditMode(scope);
 
     if (window.htmx) htmx.trigger('#status-panel', 'load');
   }
@@ -1886,6 +2023,8 @@ document.body.dataset.commandWaitHintMs = '{{ ((config.api.device_command_timeou
     autoImportBtn.disabled = true;
     discoverBtn.disabled = true;
     importBtn.disabled = true;
+    const syncFleetBtn = document.getElementById('sync-fleet-btn');
+    if (syncFleetBtn) syncFleetBtn.disabled = true;
     const lan = document.getElementById('lan-scan-toggle').checked;
     try {
       const resp = await fetch(`/api/devices/auto-import?lan_scan=${lan}&mode=merge`, {
@@ -1906,9 +2045,39 @@ document.body.dataset.commandWaitHintMs = '{{ ((config.api.device_command_timeou
     } finally {
       autoImportBtn.disabled = false;
       discoverBtn.disabled = false;
+      if (syncFleetBtn) syncFleetBtn.disabled = false;
       updateImportBtnState();
     }
   };
+
+  const syncFleetBtn = document.getElementById('sync-fleet-btn');
+  if (syncFleetBtn) {
+    syncFleetBtn.onclick = async function() {
+      importStatus.textContent = 'Syncing idle pumps to current auto program…';
+      syncFleetBtn.disabled = true;
+      try {
+        const resp = await fetch('/api/pumps/sync-fleet', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        if (!resp.ok) {
+          importStatus.textContent = 'Fleet sync failed: ' + (await resp.text());
+          return;
+        }
+        const data = await resp.json();
+        if (Array.isArray(data.synced) && data.synced.length) {
+          importStatus.textContent =
+            `Synced ${data.synced.length} pump(s) to fleet (${data.reference_phase || 'auto'})`;
+        } else {
+          importStatus.textContent = data.reason || 'No pumps needed fleet sync';
+        }
+        if (window.refreshStatusPanel) window.refreshStatusPanel();
+      } finally {
+        syncFleetBtn.disabled = false;
+      }
+    };
+  }
 
   async function loadSetup() {
     const resp = await fetch('/api/devices/setup');

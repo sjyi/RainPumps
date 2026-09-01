@@ -73,7 +73,7 @@ async def test_get_pump_cards_without_refresh_uses_cache_only(service: PumpServi
     await service.get_pump_cards(refresh_cloud=False)
 
     service.refresh_meross_ui_state.assert_not_awaited()
-    service.probe_pumps_online.assert_awaited_once_with(use_cache_only=True)
+    service.probe_pumps_online.assert_awaited_once_with(use_cache_only=False)
 
 
 @pytest.mark.asyncio
@@ -86,4 +86,4 @@ async def test_get_pump_cards_with_refresh_respects_ui_cache(service: PumpServic
     await service.get_pump_cards(refresh_cloud=True)
 
     refresh.assert_awaited_once_with(force=False)
-    service.probe_pumps_online.assert_awaited_once_with(use_cache_only=True)
+    service.probe_pumps_online.assert_awaited_once_with(use_cache_only=False)

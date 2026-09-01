@@ -90,7 +90,11 @@ def diff_meross_cloud_names(
     config: AppConfig,
     cloud: MerossCloudNames,
 ) -> tuple[dict[str, str], dict[str, str]]:
-    """Return pump/device label updates needed to match Meross cloud."""
+    """Return pump/device label updates needed to match Meross cloud.
+
+    Pumps and devices with explicit labels in config.yaml are left unchanged so
+    Admin UI edits are not overwritten by periodic cloud sync.
+    """
     current_devices = device_labels_map(config)
     pump_updates: dict[str, str] = {}
     device_updates: dict[str, str] = {}
@@ -99,12 +103,16 @@ def diff_meross_cloud_names(
         pump = next((p for p in config.pumps if p.name == name), None)
         if pump is None:
             continue
+        if (pump.label or "").strip():
+            continue
         current = pump_display_label(pump)
         if current != label:
             pump_updates[name] = label
 
     for key, label in cloud.device_labels.items():
         current = current_devices.get(key, "")
+        if current.strip():
+            continue
         if current != label:
             device_updates[key] = label
 

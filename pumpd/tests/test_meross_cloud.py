@@ -12,6 +12,7 @@ from app.devices.meross_cloud import (
     MerossCloudSession,
     channel_to_switch_code,
     iter_meross_outlets,
+    meross_entry_channel,
     switch_code_to_channel,
 )
 
@@ -30,6 +31,106 @@ def test_iter_meross_outlets_mss620_dual() -> None:
     ]
     outlets = iter_meross_outlets(channels, device_type="mss620")
     assert outlets == [(1, "Rm 303"), (2, "Switch 2")]
+
+
+def test_meross_entry_channel_uses_index_when_missing() -> None:
+    assert meross_entry_channel({"type": "Switch", "devName": "Outlet 2"}, 2) == 2
+    assert meross_entry_channel({"channel": 1, "type": "Switch"}, 2) == 1
+
+
+@pytest.mark.asyncio
+async def test_update_cloud_switch_name_mss620_second_outlet() -> None:
+    session = MerossCloudSession(email="a@b.com", password="secret")
+    channels = [
+        {},
+        {"type": "Switch", "devName": "Switch 1"},
+        {"type": "Switch", "devName": "dead"},
+    ]
+    base_info = {
+        "uuid": "uuid-202",
+        "devName": "2nd fl 202",
+        "deviceType": "mss620",
+        "channels": channels,
+    }
+    updated_info = {
+        **base_info,
+        "channels": [
+            {},
+            {"type": "Switch", "devName": "Switch 1"},
+            {"type": "Switch", "devName": "live", "channel": 2},
+        ],
+    }
+    session.cloud_post = AsyncMock(side_effect=[base_info, {}, updated_info])
+
+    result = await session.update_cloud_switch_name(
+        "uuid-202",
+        2,
+        "live",
+        device_type="mss620",
+        channels=channels,
+    )
+    assert result["success"] is True
+    assert result["api_path"] == "/v1/Device/devInfo"
+    post_call = session.cloud_post.await_args_list[1]
+    assert post_call.args[0] == "/v1/Device/devInfo"
+    payload = post_call.args[1]
+    assert payload["channels"][2]["devName"] == "live"
+    assert payload["channels"][2]["channel"] == 2
+
+
+@pytest.mark.asyncio
+async def test_update_cloud_switch_name_unsupported_when_not_persisted() -> None:
+    session = MerossCloudSession(email="a@b.com", password="secret")
+    channels = [
+        {},
+        {"type": "Switch", "devName": "Switch 1"},
+        {"type": "Switch", "devName": "dead"},
+    ]
+    base_info = {
+        "uuid": "uuid-202",
+        "devName": "2nd fl 202",
+        "deviceType": "mss620",
+        "channels": channels,
+    }
+    session.cloud_post = AsyncMock(side_effect=[base_info, {}, base_info])
+
+    result = await session.update_cloud_switch_name(
+        "uuid-202",
+        2,
+        "live",
+        device_type="mss620",
+        channels=channels,
+    )
+    assert result["success"] is False
+    assert result.get("unsupported") is True
+    assert "read-only" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_update_cloud_switch_name_missing_channel_returns_error() -> None:
+    session = MerossCloudSession(email="a@b.com", password="secret")
+    channels = [
+        {},
+        {"type": "Switch", "devName": "Switch 1"},
+    ]
+    session.cloud_post = AsyncMock(
+        return_value={
+            "uuid": "uuid-202",
+            "devName": "2nd fl 202",
+            "deviceType": "mss620",
+            "channels": channels,
+        }
+    )
+    result = await session.update_cloud_switch_name(
+        "uuid-202",
+        2,
+        "live",
+        device_type="mss620",
+        channels=channels,
+    )
+    assert result["success"] is False
+    assert "channel 2 not found" in result["message"].lower()
+    assert session.cloud_post.await_count == 1
 
 
 @pytest.mark.asyncio
